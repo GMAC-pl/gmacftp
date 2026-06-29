@@ -1,0 +1,88 @@
+[package]
+name = "gmacftp"
+version = "0.0.2"
+edition = "2021"
+rust-version = "1.88"
+description = "gmacFTP — native, lightweight FTP/FTPS/SFTP client for macOS"
+license = "GPL-3.0"
+publish = false
+
+[dependencies]
+# --- GUI: Slint 1.x, FemtoVG renderer on wgpu (Metal). NO Skia, NO Qt, NO web view. ---
+slint = { version = "1.16", default-features = false, features = [
+    "std",
+    "backend-winit",
+    "unstable-winit-030",
+    "renderer-femtovg-wgpu",
+    "accessibility",
+    "compat-1-2", # MANDATORY — Slint compile_error!'s without it (forward-compat gate)
+] }
+# Pinned to match Slint's internal core, so we can drive keyboard focus directly: Slint only
+# delivers key-pressed to the focused item, and nothing focuses the root FocusScope on startup, so
+# we focus it ourselves (WindowInner::focus_next_item) on launch + on every pane activation.
+i-slint-core = "=1.16.1"
+# Direct access to Slint's winit backend so we can DISABLE its default (muda) menu bar.
+# Without this, WinitWindowAdapter::activation_changed() installs muda's NSMenu via
+# NSApplication::setMainMenu on every WindowEvent::Focused, clobbering our objc2 menu
+# (the intermittent missing-iCloud-menu bug). The `muda` feature enables with_default_menu_bar().
+i-slint-backend-winit = { version = "=1.16.1", features = ["muda"] }
+
+# --- Async runtime (shared with net/transfer actors) ---
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros", "io-util", "net", "fs", "time"] }
+tokio-stream = "0.1"
+async-trait = "0.1"
+futures = "0.3"
+
+# --- FTP / FTPS (explicit-TLS; native-tls -> macOS Security.framework for CA compat) ---
+suppaftp = { version = "8", features = ["native-tls"] }
+
+# --- SFTP (pure Rust, no C deps) ---
+russh = "0.61"
+russh-sftp = "2"
+
+# --- Keychain (v4 split the backends into per-store features) ---
+keyring = { version = "4", features = ["apple-native-keyring-store"] }
+
+# --- Private encrypted credential vault (no macOS Keychain prompt) ---
+aes-gcm = "0.10"
+rand = "0.8"
+base64 = "0.22"
+
+# --- Ergonomics / safety / observability ---
+anyhow = "1"
+thiserror = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# XML parser for the FileZilla sitemanager.xml import (read-only DOM; tiny, no unsafe).
+roxmltree = "0.20"
+# Native OS file-open dialog for the Import button (NSOpenPanel on macOS via objc2; Send + async).
+rfd = "0.17"
+zeroize = "1"
+directories = "5"
+trash = "5"   # move local files to the OS Trash on delete (reversible, never permanent)
+drag = "2.1"
+# In-app update check: query the GitHub Releases API + download the latest DMG.
+ureq = { version = "2.12", features = ["json"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = "3"   # one-time ForkLift internet-password import
+objc2 = "0.6"
+raw-window-handle = "0.6"
+objc2-app-kit = "0.3.2"     # native macOS menu bar / About panel (NSMenu, NSApp, NSWindow)
+objc2-foundation = "0.3.2"  # NSString, NSData, NSNumber for the menu
+
+[build-dependencies]
+slint-build = "1.16"
+
+# --- Release profile: small binary + fast cold start. MEASURE with hyperfine, don't guess. ---
+[profile.release]
+opt-level = "z"       # smallest size -> best I-cache on cold start (flip to 3 if UI feels laggy)
+lto = "thin"          # most of "fat" LTO's gain, far faster link
+codegen-units = 1     # full dead-code elimination + better inlining
+panic = "abort"       # drops unwinding tables -> large size reducer
+strip = "symbols"     # no symbols -> fewer page faults from disk (keep a .dSYM for crash symbolication)

@@ -1,0 +1,2177 @@
+// ui/app.slint — gmacFTP main UI. macOS Finder-inspired, theme-aware (light default,
+// dark variant). Readability-first: solid selection + hover (no low-alpha "wall of gray"),
+// strong text contrast, clear hairlines, accent chips for folder/file glyphs.
+//
+// NOTE: glyphs are ASCII / Latin-1 only (no emoji / rare unicode). The femtovg GPU renderer
+// can't color emoji and the default font lacks many symbol glyphs — that made the earlier
+// icon set invisible. "/", "·", "<", ">", "^", "+" all render reliably everywhere.
+
+import { ScrollView } from "std-widgets.slint";
+import "../assets/fonts/Inter-Regular.ttf";
+import "../assets/fonts/JetBrainsMono-Regular.ttf";
+
+// ── design tokens (macOS Finder light + dark, switchable at runtime) ──
+export global Tokens {
+    in-out property <string> theme: "light";   // "light" | "dark" — set from Rust (settings)
+    // backgrounds
+    out property <color> bg:             theme == "dark" ? #1B1B1D : #FFFFFF;
+    out property <color> bg-alt:         theme == "dark" ? #232325 : #F5F5F7;   // sidebar
+    out property <color> surface:        theme == "dark" ? #28282B : #FAFAFB;   // toolbar / pane header
+    out property <color> surface-raised: theme == "dark" ? #2E2E32 : #FFFFFF;   // dialogs / cards
+    out property <color> card:           theme == "dark" ? #333337 : #FFFFFF;   // Pencil modal/card surface
+    out property <color> field-bg:       theme == "dark" ? #2A2A2D : #FFFFFF;
+    out property <color> pane-active:    theme == "dark" ? #162B40 : #EAF3FF;
+    // hairlines (SOLID — the old alpha-white lines were invisible on near-black)
+    out property <color> border:        theme == "dark" ? #3A3A3E : #E7E7EC;
+    out property <color> border-strong: theme == "dark" ? #515159 : #D3D3D9;
+    // text (macOS label colors — bright secondary text = the readability fix)
+    out property <color> text:        theme == "dark" ? #F2F2F5 : #1D1D1F;
+    out property <color> text-sec:     theme == "dark" ? #AFAFB4 : #6E6E73;
+    out property <color> text-ter:     theme == "dark" ? #86868B : #A1A1A6;
+    // accents (macOS system)
+    out property <color> accent:       theme == "dark" ? #0A84FF : #007AFF;
+    out property <color> accent-hover: theme == "dark" ? #3D9BFF : #0066D6;
+    out property <color> accent-text:  theme == "dark" ? #4DA3FF : #0064D1;  // accent for small TEXT (≥4.5:1; accent itself is for icons/large UI)
+    out property <color> brand:        theme == "dark" ? #BF5AF2 : #8A2BE2;   // remote accent (distinct from local)
+    out property <color> success:      theme == "dark" ? #30D158 : #28B650;
+    out property <color> danger:       theme == "dark" ? #FF453A : #E0382E;
+    // semantic fill/text shades: accent/danger/success are fine for icons & large UI, but small
+    // TEXT and filled-button backgrounds need slightly different shades to clear WCAG 4.5:1.
+    out property <color> primary-fill:       theme == "dark" ? #0A6ED0 : #0064D1;  // filled buttons + row selection (white text ≥ 4.5:1)
+    out property <color> primary-fill-hover: theme == "dark" ? #0A84FF : #0058B0;
+    out property <color> danger-text:        theme == "dark" ? #FF7A70 : #C4291F;  // small destructive text (≥4.5:1 on dialog)
+    out property <color> danger-fill:        theme == "dark" ? #B83A2E : #C4291F;  // filled destructive button (white text ≥ 4.5:1)
+    out property <color> danger-fill-hover:  theme == "dark" ? #C84A3E : #A8231A;
+    out property <color> success-text:       theme == "dark" ? #36D96B : #1A8439;  // small success text
+    // selection / hover (SOLID — replaces the old translucent selection that vanished)
+    out property <color> selection:      theme == "dark" ? #2E63B0 : #0064D1;  // darker blue so white row text clears 4.5:1
+    out property <color> selection-text: #FFFFFF;
+    out property <color> row-hover:      theme == "dark" ? #343438 : #EDF1F7;
+    out property <color> sidebar-active: theme == "dark" ? #2E63B055 : #007AFF22;
+    // icon chips
+    out property <color> folder:  theme == "dark" ? #5AA9F0 : #3B82F6;
+    out property <color> file:    theme == "dark" ? #5A5A5F : #C2C7CF;
+    // soft tinted backgrounds for tags / chips / active toggles (SOLID tints, not alpha-on-white)
+    out property <color> accent-soft:  theme == "dark" ? #0A84FF22 : #EAF2FF;
+    out property <color> brand-soft:   theme == "dark" ? #BF5AF222 : #F3EAFC;
+    out property <color> danger-soft:  theme == "dark" ? #FF453A26 : #FDE3E1;
+    out property <color> success-soft: theme == "dark" ? #30D15826 : #28B6501F;
+    out property <color> warning:      theme == "dark" ? #FFD60A : #F0932B;
+    out property <color> scrim:    theme == "dark" ? #00000073 : #00000040;
+    // radii
+    out property <length> r-row:    8px;
+    out property <length> r-button: 7px;
+    out property <length> r-track:  3px;
+    out property <length> r-chip:   4px;
+}
+
+export global I18n {
+    in-out property <string> locale: "en";
+    out property <string> connections: locale == "pl" ? "POŁĄCZENIA" : "CONNECTIONS";
+    out property <string> local:      locale == "pl" ? "LOKALNY"   : "LOCAL";
+    out property <string> remote:     locale == "pl" ? "ZDALNY"    : "REMOTE";
+    out property <string> connect:    locale == "pl" ? "Połącz"    : "Connect";
+    out property <string> disconnect: locale == "pl" ? "Rozłącz"   : "Disconnect";
+    out property <string> connected:  locale == "pl" ? "POŁĄCZONE" : "CONNECTED";
+    out property <string> favorites:  locale == "pl" ? "ULUBIONE"  : "FAVORITES";
+    out property <string> saved:      locale == "pl" ? "ZAPISANE"  : "SAVED";
+    out property <string> refresh:    locale == "pl" ? "Odśwież"   : "Refresh";
+    out property <string> download:   locale == "pl" ? "Pobierz"   : "Download";
+    out property <string> upload:     locale == "pl" ? "Wyślij"    : "Upload";
+    out property <string> new-cap:    locale == "pl" ? "Nowy"      : "New";
+    out property <string> save-cap:   locale == "pl" ? "Zapisz"    : "Save";
+    out property <string> cancel-cap: locale == "pl" ? "Anuluj"    : "Cancel";
+    out property <string> close-cap:  locale == "pl" ? "Zamknij"   : "Close";
+    out property <string> edit-cap:   locale == "pl" ? "Edytuj"    : "Edit";
+    out property <string> del-cap:    locale == "pl" ? "Usuń"      : "Delete";
+    out property <string> delete-dont-ask: locale == "pl" ? "Nie pytaj ponownie w tej sesji" : "Don't ask again this session";
+    out property <string> overwrite-title: locale == "pl" ? "Plik już istnieje" : "File already exists";
+    out property <string> overwrite-msg: locale == "pl" ? "Plik o tej nazwie już istnieje w miejscu docelowym. Co chcesz zrobić?" : "A file with this name already exists at the destination. What do you want to do?";
+    out property <string> overwrite-cap: locale == "pl" ? "Nadpisz" : "Overwrite";
+    out property <string> save-new-cap: locale == "pl" ? "Zapisz jako nowy" : "Save as new";
+    out property <string> import-cap: locale == "pl" ? "Import z ForkLift" : "Import from ForkLift";
+    out property <string> not-connected: locale == "pl" ? "brak połączenia" : "not connected";
+    out property <string> connecting: locale == "pl" ? "łączenie…" : "connecting…";
+    out property <string> search:     locale == "pl" ? "szukaj…" : "search…";
+    out property <string> new-conn:   locale == "pl" ? "Nowe połączenie" : "New connection";
+    out property <string> edit-conn:  locale == "pl" ? "Edytuj połączenie" : "Edit connection";
+    out property <string> tls-on:     locale == "pl" ? "TLS: dowolny cert" : "TLS: any cert";
+    out property <string> tls-off:    locale == "pl" ? "TLS: restrykcyjny" : "TLS: strict";
+    // context menu
+    out property <string> open-cap:   locale == "pl" ? "Otwórz"      : "Open";
+    out property <string> copy-path:  locale == "pl" ? "Kopiuj ścieżkę" : "Copy Path";
+    out property <string> xfer-here:  locale == "pl" ? "Prześlij tutaj"  : "Transfer Here";
+}
+
+export global Fmt {
+    public pure function human-size(bytes: int) -> string {
+        bytes < 1024 ? bytes + " B"
+        : bytes < 1024 * 1024 ? (bytes / 1024) + " KB"
+        : bytes < 1024 * 1024 * 1024 ? (bytes / (1024 * 1024)) + " MB"
+        : (bytes / (1024 * 1024 * 1024)) + " GB"
+    }
+    public pure function favorite-drop-index(y: length, top: length, count: int) -> int {
+        clamp((y - top + 15px) / 30px, 0, count)
+    }
+    public pure function saved-drop-index(y: length, top: length, count: int) -> int {
+        clamp((y - top + 16px) / 32px, 0, count)
+    }
+}
+
+export struct ConnRow { id: int, label: string, sub: string, protocol: string, connected: bool }
+export struct EntryRow {
+    name: string,
+    is-dir: bool,
+    size: int,
+    mtime: int,
+    date: string,
+    size-text: string,
+    metadata-state: string, // "ready" | "loading" | "unavailable"
+}
+export struct LocalFavoriteRow { label: string, path: string }
+export struct TransferRow {
+    id: int,
+    name: string,        // display name (relative path)
+    direction: string,   // "download" | "upload"
+    route: string,       // "src -> dst" host route (e.g. "ftp.a -> ftp.b" or "local -> ftp.a")
+    done: int,
+    total: int,
+    progress-text: string,
+    fraction: float,
+    state: string,       // "active" | "done" | "failed" | "queued"
+    message: string,     // ETA string or error text
+}
+
+// ── reusable controls ──
+component PrimaryButton inherits Rectangle {
+    in property <string> text;
+    in property <string> icon: "";
+    callback clicked();
+    height: 34px; min-width: 88px;
+    background: ta.has-hover ? Tokens.primary-fill-hover : Tokens.primary-fill;
+    border-radius: Tokens.r-button;
+    HorizontalLayout { alignment: center; padding-left: 14px; padding-right: 14px; spacing: 8px;
+        Text { text: root.text; color: #FFFFFF; font-size: 13px; font-weight: 600; vertical-alignment: center; }
+    }
+    ta := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+}
+component GhostButton inherits Rectangle {
+    in property <string> text;
+    in property <string> icon: "";
+    in property <color> text-color: Tokens.text-sec;
+    in property <color> text-color-hover: Tokens.text;
+    in property <bool> active: false;
+    callback clicked();
+    height: 34px; min-width: 48px;
+    background: root.active ? Tokens.row-hover : (ta.has-hover ? Tokens.row-hover : transparent);
+    border-radius: Tokens.r-button;
+    HorizontalLayout { alignment: center; padding-left: 11px; padding-right: 11px; spacing: 7px;
+        Text { text: root.text; color: root.active ? Tokens.accent : (ta.has-hover ? root.text-color-hover : root.text-color); font-size: 13px; font-weight: 500; vertical-alignment: center; }
+    }
+    ta := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+}
+// progress bar (transfer progress)
+component ProgressBar inherits Rectangle {
+    in property <float> fraction;
+    height: 3px;
+    background: Tokens.border;
+    border-radius: Tokens.r-track;
+    Rectangle {
+        height: parent.height; y: 0; x: 0;
+        width: parent.width * clamp(root.fraction, 0, 1);
+        background: Tokens.accent; border-radius: Tokens.r-track;
+    }
+}
+// folder / file glyph drawn as a vector Path (femtovg renders Path reliably). Full-row-height
+// transparent cell so the layout doesn't stretch the glyph; the 18×18 glyph is centered.
+component FileIcon inherits Rectangle {
+    in property <bool> is-dir;
+    in property <bool> selected: false;   // white glyph on the solid selection background
+    width: 20px; height: 30px;
+    background: transparent;
+    Path {
+        x: 1px; y: 6px; width: 18px; height: 18px;
+        commands:
+            root.is-dir
+            ? "M15 15 A1.5 1.5 0 0 0 16.5 13.5 V6 A1.5 1.5 0 0 0 15 4.5 H9.08 A1.5 1.5 0 0 1 7.82 3.82 L7.2 2.92 A1.5 1.5 0 0 0 5.95 2.25 H3 A1.5 1.5 0 0 0 1.5 3.75 V13.5 A1.5 1.5 0 0 0 3 15 Z"
+            : "M4.5 16.5 A1.5 1.5 0 0 1 3 15 V3 A1.5 1.5 0 0 1 4.5 1.5 H10.5 A1.8 1.8 0 0 1 11.78 2.03 L14.47 4.72 A1.8 1.8 0 0 1 15 6 V15 A1.5 1.5 0 0 1 13.5 16.5 Z M10.5 1.5 V5.25 A0.75 0.75 0 0 0 11.25 6 H15 M7.5 6.75 H6 M12 9.75 H6 M12 12.75 H6";
+        fill: transparent;
+        stroke: root.selected ? #FFFFFF : (root.is-dir ? Tokens.folder : Tokens.file);
+        stroke-width: 1.7px;
+    }
+}
+
+component MetadataSizeCell inherits Rectangle {
+    in property <string> text;
+    in property <string> state: "ready";
+    in property <bool> selected: false;
+    in property <int> pulse: 0;
+    width: 52px;
+    height: 30px;
+    background: transparent;
+
+    if root.state != "loading" : Text {
+        text: root.state == "unavailable" ? "—" : root.text;
+        color: root.selected ? #FFFFFFCC : Tokens.text-sec;
+        font-family: "JetBrains Mono";
+        font-size: 11px;
+        width: parent.width;
+        height: parent.height;
+        vertical-alignment: center;
+        horizontal-alignment: right;
+    }
+
+    if root.state == "loading" : Rectangle {
+        width: parent.width;
+        height: parent.height;
+        background: transparent;
+        for dot[i] in 3 : Rectangle {
+            x: 28px + i * 7px;
+            y: (parent.height - 4px) / 2;
+            width: 4px;
+            height: 4px;
+            border-radius: 2px;
+            background: root.selected ? #FFFFFF : Tokens.accent;
+            opacity: root.pulse == i ? 1.0 : 0.28;
+            animate opacity { duration: 140ms; easing: ease-in-out; }
+        }
+    }
+}
+
+// vector line/fill icon (16px), drawn with a Slint Path. femtovg renders Path reliably;
+// this avoids the emoji / missing-glyph problem that broke the earlier icon set.
+component Icon inherits Rectangle {
+    in property <string> kind;
+    in property <color> fg: Tokens.text;
+    width: 16px; height: 16px;
+    Path {
+        x: 0px; y: 0px; width: 16px; height: 16px;
+        commands:
+            root.kind == "search"     ? "M14 14 L11.1 11.1 M2 7.3 A5.3 5.3 0 1 1 12.7 7.3 A5.3 5.3 0 1 1 2 7.3" :
+            root.kind == "refresh"    ? "M2 8 A6 6 0 0 1 8 2 A6.5 6.5 0 0 1 12.5 3.8 L14 5.3 M14 2 V5.3 H10.7 M14 8 A6 6 0 0 1 8 14 A6.5 6.5 0 0 1 3.5 12.2 L2 10.7 M5.3 10.7 H2 V14" :
+            root.kind == "lock"       ? "M3 7.6 H13 V13.6 H3 Z M5 7.6 V5.6 A3 3 0 0 1 11 5.6 V7.6" :
+            root.kind == "eye"        ? "M1.5 8 C3 4.5 13 4.5 14.5 8 C13 11.5 3 11.5 1.5 8 Z M6.2 8 A1.8 1.8 0 1 0 9.8 8 A1.8 1.8 0 1 0 6.2 8" :
+            root.kind == "sun"        ? "M5.3 8 A2.7 2.7 0 1 0 10.7 8 A2.7 2.7 0 1 0 5.3 8 M8 1.3 V2.7 M8 13.3 V14.7 M3.3 3.3 L4.2 4.2 M11.8 11.8 L12.7 12.7 M1.3 8 H2.7 M13.3 8 H14.7 M4.2 11.8 L3.3 12.7 M12.7 3.3 L11.8 4.2" :
+            root.kind == "moon"       ? "M14 8.3 A6 6 0 1 1 7.7 2 C8 2 8.1 2.3 8 2.5 A4 4 0 0 0 13.5 8 C13.7 7.9 14 8 14 8.3" :
+            root.kind == "theme"      ? "M8 1.3 V2.7 M9.9 10.9 A4 4 0 1 1 5.1 6.1 C5.5 6 5.7 6.6 5.5 6.9 A2.7 2.7 0 0 0 9.1 10.5 C9.5 10.3 10 10.5 9.9 10.9 M10.7 8 A2.7 2.7 0 0 0 8 5.3 M12.7 3.3 L11.8 4.2 M13.3 8 H14.7" :
+            root.kind == "server"     ? "M2.7 1.3 H13.3 A1.3 1.3 0 0 1 14.7 2.7 V6 A1.3 1.3 0 0 1 13.3 7.3 H2.7 A1.3 1.3 0 0 1 1.3 6 V2.7 A1.3 1.3 0 0 1 2.7 1.3 M2.7 8.7 H13.3 A1.3 1.3 0 0 1 14.7 10 V13.3 A1.3 1.3 0 0 1 13.3 14.7 H2.7 A1.3 1.3 0 0 1 1.3 13.3 V10 A1.3 1.3 0 0 1 2.7 8.7 M4 4 H4.1 M4 12 H4.1" :
+            root.kind == "trash"      ? "M6.7 7.3 V11.3 M9.3 7.3 V11.3 M12.7 4 V13.3 A1.3 1.3 0 0 1 11.3 14.7 H4.7 A1.3 1.3 0 0 1 3.3 13.3 V4 M2 4 H14 M5.3 4 V2.7 A1.3 1.3 0 0 1 6.7 1.3 H9.3 A1.3 1.3 0 0 1 10.7 2.7 V4" :
+            root.kind == "edit"       ? "M14.1 4.5 A0.7 0.7 0 0 0 11.5 1.9 L2.6 10.8 A1.3 1.3 0 0 0 2.2 11.4 L1.3 14.2 A0.3 0.3 0 0 0 1.8 14.7 L4.7 13.8 A1.3 1.3 0 0 0 5.2 13.4 Z M10 3.3 L12.7 6" :
+            root.kind == "shield"     ? "M13.3 8.7 C13.3 12 11 13.7 8.2 14.6 A0.7 0.7 0 0 1 7.8 14.6 C5 13.7 2.7 12 2.7 8.7 V4 A0.7 0.7 0 0 1 3.3 3.3 C4.7 3.3 6.3 2.5 7.5 1.8 A0.8 0.8 0 0 1 8.5 1.8 C9.7 2.5 11.3 3.3 12.7 3.3 A0.7 0.7 0 0 1 13.3 4 Z M6 8 L7.3 9.3 L10 6.7" :
+            root.kind == "plug"       ? "M5.5 2 V5.2 M10.5 2 V5.2 M4 5.2 H12 V8 A4 4 0 0 1 4 8 Z M8 12 V14 M5 14 H11" :
+            root.kind == "plug-zap"   ? "M4.2 13.5 A1.6 1.6 0 0 0 6.5 13.5 L8 12 L4 8 L2.5 9.5 A1.6 1.6 0 0 0 2.5 11.8 Z M1.3 14.7 L3.3 12.7 M5 9 L6.7 7.3 M7 11 L8.7 9.3 M12 2 L9.3 4.7 H13.3 L10.7 7.3" :
+            root.kind == "enter"      ? "M13.3 2.7 V7.3 A2.7 2.7 0 0 1 10.7 10 H2.7 M6 6.7 L2.7 10 L6 13.3" :
+            root.kind == "log-out"    ? "M10.7 11.3 L14 8 L10.7 4.7 M14 8 H6 M6 14 H3.3 A1.3 1.3 0 0 1 2 12.7 V3.3 A1.3 1.3 0 0 1 3.3 2 H6" :
+            root.kind == "log-in"     ? "M6.7 11.3 L10 8 L6.7 4.7 M10 8 H2 M10 2 H12.7 A1.3 1.3 0 0 1 14 3.3 V12.7 A1.3 1.3 0 0 1 12.7 14 H10" :
+            root.kind == "check"      ? "M3 8.5 L6.4 12 L13 4" :
+            root.kind == "pause"      ? "M5 3 V13 M11 3 V13" :
+            root.kind == "activity"   ? "M2 9 H4.4 L5.6 4 L8.4 13 L10 7 H14" :
+            root.kind == "globe"      ? "M8 3 A5 5 0 1 0 8.01 3 M3 8 H13 M8 3 C5.5 5 5.5 11 8 13 C10.5 11 10.5 5 8 3" :
+            root.kind == "transfer"   ? "M5.3 2 L2.7 4.7 L5.3 7.3 M2.7 4.7 H13.3 M10.7 14 L13.3 11.3 L10.7 8.7 M13.3 11.3 H2.7" :
+            root.kind == "arrow-up"   ? "M8 2 V14 M3 7 L8 2 L13 7" :
+            root.kind == "arrow-down" ? "M8 2 V14 M3 9 L8 14 L13 9" :
+            root.kind == "download"   ? "M8 2 V10 M3.3 10 V12.7 A1.3 1.3 0 0 0 4.7 14 H11.3 A1.3 1.3 0 0 0 12.7 12.7 V10 M4.7 6.7 L8 10 L11.3 6.7" :
+            root.kind == "arrow-down-line" ? "M8 2 V11.3 M4 7.3 L8 11.3 L12 7.3 M12.7 14 H3.3" :
+            root.kind == "arrow-up-line" ? "M12 6 L8 2 L4 6 M8 2 V11.3 M3.3 14 H12.7" :
+            root.kind == "sort-asc"   ? "M2 5.3 L4.7 2.7 L7.3 5.3 M4.7 2.7 V13.3 M7.3 8 H10 M7.3 10.7 H12 M7.3 13.3 H14" :
+            root.kind == "sort-desc"  ? "M2 10.7 L4.7 13.3 L7.3 10.7 M4.7 13.3 V2.7 M7.3 2.7 H14 M7.3 5.3 H12 M7.3 8 H10" :
+            root.kind == "arrow-left" ? "M2 8 H14 M7 3 L2 8 L7 13" :
+            root.kind == "arrow-right"? "M2 8 H14 M9 3 L14 8 L9 13" :
+            root.kind == "chevron-up" ? "M12 10 L8 6 L4 10" :
+            root.kind == "plus"       ? "M8 3 V13 M3 8 H13" :
+            root.kind == "power"      ? "M8 2 V7.5 M4.6 4 A5 5 0 1 0 11.4 4" :
+            root.kind == "list"       ? "M3 4 H13 M3 8 H13 M3 12 H13" :
+            root.kind == "copy"       ? "M5.3 5.3 H12.7 A1.3 1.3 0 0 1 14 6.7 V12.7 A1.3 1.3 0 0 1 12.7 14 H6.7 A1.3 1.3 0 0 1 5.3 12.7 Z M2.7 10.7 C1.9 10.7 1.3 10.1 1.3 9.3 V2.7 C1.3 1.9 1.9 1.3 2.7 1.3 H9.3 C10.1 1.3 10.7 1.9 10.7 2.7" :
+            root.kind == "home"       ? "M10 14 V8.7 A0.7 0.7 0 0 0 9.3 8 H6.7 A0.7 0.7 0 0 0 6 8.7 V14 M2 6.7 A1.3 1.3 0 0 1 2.5 5.7 L7.2 1.7 A1.3 1.3 0 0 1 8.8 1.7 L13.5 5.7 A1.3 1.3 0 0 1 14 6.7 V12.7 A1.3 1.3 0 0 1 12.7 14 H3.3 A1.3 1.3 0 0 1 2 12.7 Z" :
+            root.kind == "eject"      ? "M3 11 L8 3 L13 11 Z M2 13.5 H14" :
+            "M3.5 3.5 L12.5 12.5 M12.5 3.5 L3.5 12.5";
+        fill: transparent;
+        stroke: root.fg;
+        stroke-width: 1.5px;
+    }
+}
+
+// square icon button (Apple toolbar style) wrapping an Icon.
+component IconButton inherits Rectangle {
+    in property <string> icon;
+    in property <color> fg: Tokens.text-sec;
+    in property <bool> on: false;
+    in property <bool> disabled: false;
+    callback clicked();
+    width: 34px; height: 30px;
+    background: root.on ? Tokens.accent-soft : (ta.has-hover ? Tokens.row-hover : transparent);
+    border-radius: 6px;
+    Icon {
+        kind: root.icon;
+        fg: root.disabled ? Tokens.text-ter : (root.on ? Tokens.accent : (ta.has-hover ? Tokens.text : root.fg));
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+    }
+    ta := TouchArea { mouse-cursor: root.disabled ? not-allowed : pointer; clicked => { if (!root.disabled) { root.clicked(); } } }
+}
+
+// icon + text toolbar button (Apple style). Used for primary actions where an icon alone
+// would be ambiguous (Upload/Download/Connect/Refresh/Transfers). Toggles stay IconButton.
+component LabeledToolButton inherits Rectangle {
+    in property <string> icon;
+    in property <string> text;
+    in property <color> text-color: Tokens.text;
+    in property <color> accent-color: Tokens.accent;
+    in property <length> icon-y-offset: 0px;
+    in property <bool> disabled: false;
+    in property <bool> emphasized: false;       // filled accent chip (primary action)
+    in property <bool> danger-emphasis: false;  // emphasized but danger-filled (destructive primary)
+    callback clicked();
+    height: 30px; min-width: 72px;
+    border-radius: 6px;
+    background: root.emphasized
+        ? (root.disabled
+            ? (root.danger-emphasis ? Tokens.danger-soft : Tokens.accent-soft)
+            : (root.danger-emphasis
+            ? (ta.has-hover ? Tokens.danger-fill-hover : Tokens.danger-fill)
+            : (ta.has-hover ? Tokens.primary-fill-hover : Tokens.primary-fill)))
+        : (ta.has-hover ? Tokens.row-hover : transparent);
+    HorizontalLayout { alignment: center; padding-left: root.emphasized ? 12px : 11px; padding-right: root.emphasized ? 12px : 11px; spacing: root.emphasized ? 6px : 6px;
+        Icon {
+            kind: root.icon;
+            width: 15px; height: 15px;
+            fg: root.disabled ? (root.emphasized ? #FFFFFF99 : Tokens.text-ter)
+                : (root.emphasized ? #FFFFFF
+                    : (ta.has-hover ? root.text-color : root.accent-color));
+            y: (parent.height - self.height) / 2 + root.icon-y-offset;
+        }
+        Text {
+            text: root.text;
+            color: root.disabled ? (root.emphasized ? #FFFFFF99 : Tokens.text-ter) : (root.emphasized ? #FFFFFF : root.text-color);
+            font-size: 12px; font-weight: root.emphasized ? 600 : 500; vertical-alignment: center;
+        }
+    }
+    ta := TouchArea { mouse-cursor: root.disabled ? not-allowed : pointer; clicked => { if (!root.disabled) { root.clicked(); } } }
+}
+
+component ManagerActionButton inherits Rectangle {
+    in property <string> icon;
+    in property <string> text;
+    in property <color> text-color: Tokens.text-sec;
+    in property <color> accent-color: Tokens.text-sec;
+    in property <bool> emphasized: false;
+    callback clicked();
+    height: 28px;
+    border-radius: 6px;
+    background: root.emphasized ? (ta.has-hover ? Tokens.primary-fill-hover : Tokens.primary-fill) : (ta.has-hover ? Tokens.row-hover : transparent);
+    HorizontalLayout { alignment: center; padding-left: root.emphasized ? 11px : 10px; padding-right: root.emphasized ? 11px : 10px; spacing: root.emphasized ? 6px : 5px;
+        Rectangle {
+            width: 14px; height: 16px; background: transparent;
+            Icon { kind: root.icon; width: 14px; height: 14px; x: 0px; y: root.emphasized ? 4px : 3px; fg: root.emphasized ? #FFFFFF : (ta.has-hover ? root.text-color : root.accent-color); }
+        }
+        Text { text: root.text; color: root.emphasized ? #FFFFFF : (ta.has-hover ? root.text-color : root.accent-color); font-size: 11px; font-weight: root.emphasized ? 600 : 500; vertical-alignment: center; }
+    }
+    ta := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+}
+
+// thin vertical separator between toolbar groups.
+component ToolDivider inherits Rectangle {
+    width: 1px; height: 30px; background: transparent;
+    Rectangle { y: 5px; width: 1px; height: 20px; background: Tokens.border; }
+}
+
+component ProtocolBadge inherits Rectangle {
+    in property <string> protocol;
+    in property <bool> compact: false;
+    width: root.compact ? 36px : 46px;
+    height: root.compact ? 18px : 22px;
+    border-radius: 5px;
+    background: root.protocol == "SFTP" ? Tokens.brand-soft : Tokens.accent-soft;
+    Text {
+        text: root.protocol;
+        color: root.protocol == "SFTP" ? Tokens.brand : Tokens.accent-text;
+        font-size: root.compact ? 9px : 11px;
+        font-weight: 700;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+component SidebarScrollBar inherits Rectangle {
+    in-out property <length> maximum;
+    in-out property <length> page-size;
+    in-out property <length> value;
+    out property <bool> active: grab.has-hover || grab.pressed;
+    callback scrolled();
+
+    width: 12px;
+    background: transparent;
+    visible: root.maximum > 0px;
+    clip: true;
+
+    property <length> track-size: root.height - 8px;
+    property <length> thumb-height: root.maximum <= 0px ? 0px : max(34px, root.track-size * (root.page-size / (root.maximum + root.page-size)));
+
+    thumb := Rectangle {
+        x: root.active ? 2px : 5px;
+        y: 4px + (root.track-size - root.thumb-height) * (-root.value / root.maximum);
+        width: root.active ? 8px : 4px;
+        height: root.thumb-height;
+        border-radius: self.width / 2;
+        background: Tokens.theme == "dark" ? #FFFFFF99 : #1D1D1F66;
+        opacity: root.active ? 0.62 : 0.34;
+        animate x, width, opacity { duration: 120ms; easing: ease-out; }
+    }
+
+    grab := TouchArea {
+        property <{pressed-value: length, maximum: length, y: length}> saved;
+        width: parent.width;
+        height: parent.height;
+        mouse-cursor: pointer;
+
+        function update-saved() {
+            self.saved = { pressed-value: -root.value, maximum: root.maximum, y: self.mouse-y };
+        }
+
+        pointer-event(event) => {
+            if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
+                self.update-saved();
+            }
+        }
+
+        moved => {
+            if (self.pressed && root.maximum > 0px) {
+                if (self.saved.maximum != root.maximum) {
+                    self.update-saved();
+                }
+                root.value = -max(0px, min(root.maximum, self.saved.pressed-value + (self.mouse-y - self.saved.y) * (root.maximum / (root.track-size - root.thumb-height))));
+                root.scrolled();
+            }
+        }
+
+        scroll-event(event) => {
+            if (event.delta-y != 0px) {
+                root.value = max(-root.maximum, min(0px, root.value + event.delta-y));
+                return accept;
+            }
+            reject
+        }
+    }
+}
+
+component SidebarScrollView inherits Rectangle {
+    in-out property <length> viewport-y <=> flick.viewport-y;
+    out property <length> visible-height <=> flick.height;
+    in-out property <length> viewport-height <=> flick.viewport-height;
+
+    background: transparent;
+    clip: false;
+
+    flick := Flickable {
+        width: parent.width - 10px;
+        height: parent.height;
+        interactive: false;
+        viewport-y <=> bar.value;
+        @children
+    }
+
+    bar := SidebarScrollBar {
+        x: parent.width - self.width + 8px;
+        y: 0px;
+        height: parent.height;
+        maximum: max(0px, flick.viewport-height - flick.height);
+        page-size: flick.height;
+    }
+}
+
+component FileScrollView inherits Rectangle {
+    in-out property <length> viewport-y <=> flick.viewport-y;
+    out property <length> visible-height <=> flick.height;
+    in-out property <length> viewport-height <=> flick.viewport-height;
+
+    background: transparent;
+    clip: false;
+
+    flick := Flickable {
+        width: parent.width - 12px;
+        height: parent.height;
+        interactive: false;
+        viewport-y <=> bar.value;
+        @children
+    }
+
+    bar := SidebarScrollBar {
+        x: parent.width - self.width + 4px;
+        y: 0px;
+        height: parent.height;
+        maximum: max(0px, flick.viewport-height - flick.height);
+        page-size: flick.height;
+    }
+}
+
+component TrafficButton inherits Rectangle {
+    in property <color> fill;
+    in property <string> mark;
+    callback clicked();
+
+    width: 14px;
+    height: 14px;
+    border-radius: 7px;
+    background: touch.has-hover ? root.fill : root.fill.transparentize(0.10);
+    border-width: 1px;
+    border-color: root.fill.transparentize(0.28);
+
+    Text {
+        visible: touch.has-hover;
+        text: root.mark;
+        width: parent.width;
+        height: parent.height;
+        color: #00000099;
+        font-size: 9px;
+        font-weight: 700;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+component BrandWordmark inherits Rectangle {
+    in property <length> wordmark-size: 16px;
+    in property <length> wordmark-width: 78px;
+
+    width: root.wordmark-width;
+    height: 30px;
+    background: transparent;
+
+    HorizontalLayout {
+        spacing: 0px;
+        Text {
+            text: "gmac";
+            color: Tokens.text;
+            font-family: "Avenir Next";
+            font-size: root.wordmark-size;
+            font-weight: 600;
+            vertical-alignment: center;
+        }
+        Text {
+            text: "FTP";
+            color: Tokens.accent;
+            font-family: "Avenir Next";
+            font-size: root.wordmark-size;
+            font-weight: 800;
+            vertical-alignment: center;
+        }
+    }
+}
+
+// Pane header badge ("LOCAL"/"REMOTE"/"LOKALNY"/"ZDALNY"). The colored chip is sized to its
+// text (content-driven width) so any locale label fits — the old fixed min-width:52px clipped
+// "REMOTE"/"LOKALNY" past the chip's edge. The 22px chip is vertically centered in the 30px cell.
+component PaneBadge inherits Rectangle {
+    in property <string> text;
+    in property <color> fill: Tokens.accent;
+    height: 30px;
+    background: transparent;
+    VerticalLayout { alignment: center;
+        Rectangle {
+            height: 22px; border-radius: 4px; background: root.fill;
+            HorizontalLayout { padding-left: 10px; padding-right: 10px; alignment: center;
+                Text { text: root.text; color: #FFFFFF; font-size: 11px; font-weight: 800; vertical-alignment: center; horizontal-alignment: center; }
+            }
+        }
+    }
+}
+
+component SearchField inherits Rectangle {
+    in-out property <string> text;
+    in property <string> placeholder;
+    callback edited(string);
+    height: 30px;
+    border-radius: 7px;
+    background: Tokens.field-bg;
+    border-width: 1px;
+    border-color: Tokens.border;
+    forward-focus: input;
+    Icon { kind: "search"; fg: Tokens.text-ter; x: 10px; y: (parent.height - self.height) / 2; }
+    Text {
+        x: 32px; width: parent.width - 42px; height: 100%;
+        text: root.text == "" ? root.placeholder : "";
+        color: Tokens.text-ter; font-size: 13px; vertical-alignment: center;
+    }
+    input := TextInput {
+        x: 32px; width: parent.width - 42px;
+        y: (parent.height - self.preferred-height) / 2;
+        text <=> root.text;
+        color: Tokens.text; font-size: 13px;
+        single-line: true;
+        selection-background-color: Tokens.accent;
+        selection-foreground-color: #FFFFFF;
+        edited => { root.edited(root.text); }
+    }
+}
+
+// a single context-menu entry
+component CtxItem inherits Rectangle {
+    in property <string> text;
+    in property <bool> danger: false;
+    in property <bool> disabled: false;
+    callback triggered();
+    height: 28px;
+    border-radius: 5px;
+    background: ta.has-hover ? (root.danger ? #FF3B3022 : Tokens.accent) : transparent;
+    HorizontalLayout { padding-left: 12px; padding-right: 12px; alignment: start;
+        Text { text: root.text; color: root.disabled ? Tokens.text-ter : (ta.has-hover && !root.danger ? #FFFFFF : (root.danger ? Tokens.danger-text : Tokens.text)); font-size: 12px; vertical-alignment: center; }
+    }
+    ta := TouchArea { mouse-cursor: root.disabled ? not-allowed : pointer; clicked => { if (!root.disabled) { root.triggered(); } } }
+}
+
+// Crisp, always-visible text field (macOS style). Replaces std LineEdit, whose default
+// fill is a muddy low-contrast gray (~#C3C3C3) that all but disappears on the white dialog
+// surface in light mode — so "Edit" showed no visible input boxes. Built on the TextInput
+// primitive (same pattern as Slint's own LineEditBase: forward-focus + preferred-height
+// centering) so we fully own the background, border and focus ring in BOTH themes.
+component Field inherits Rectangle {
+    in property <string> placeholder;
+    in-out property <string> text;
+    in property <InputType> input-type: InputType.text;
+    height: 34px;
+    border-radius: 6px;
+    // Fill subtly distinct from the card surface so the field reads as a control, not as
+    // background; focus lifts it and swaps the border to the accent color.
+    background: input.has-focus
+        ? (Tokens.theme == "dark" ? #232325 : #FFFFFF)
+        : (Tokens.theme == "dark" ? #1B1B1D : #F2F2F5);
+    border-width: 1px;
+    border-color: input.has-focus ? Tokens.accent : Tokens.border-strong;
+    forward-focus: input;
+    clip: true;
+    placeholder := Text {
+        x: 11px; width: parent.width - 22px; height: 100%;
+        vertical-alignment: center;
+        text: root.text == "" ? root.placeholder : "";
+        color: Tokens.text-sec; font-size: 12px;
+    }
+    input := TextInput {
+        x: 11px; width: parent.width - 22px;
+        y: (parent.height - self.preferred-height) / 2;
+        text <=> root.text;
+        color: Tokens.text; font-size: 12px;
+        input-type: root.input-type;
+        single-line: true;
+        selection-background-color: Tokens.accent;
+        selection-foreground-color: #FFFFFF;
+    }
+}
+
+// a row in the sort popover: a label with an accent dot when it's the active sort.
+component SortOpt inherits Rectangle {
+    in property <string> label;
+    in property <bool> active: false;
+    callback triggered();
+    height: 30px; border-radius: 4px;
+    background: ta.has-hover ? Tokens.row-hover : transparent;
+    HorizontalLayout { padding-left: 8px; padding-right: 8px; spacing: 10px; alignment: start;
+        Rectangle { width: 6px; height: 6px; y: (parent.height - self.height) / 2; border-radius: 3px; background: root.active ? Tokens.accent : transparent; }
+        Text { text: root.label; color: root.active ? Tokens.text : Tokens.text-sec; font-size: 12px; vertical-alignment: center; }
+    }
+    ta := TouchArea { mouse-cursor: pointer; clicked => { root.triggered(); } }
+}
+
+component SortDirOpt inherits Rectangle {
+    in property <string> label;
+    in property <bool> asc: true;
+    callback triggered();
+    height: 30px; border-radius: 4px;
+    background: ta.has-hover ? Tokens.row-hover : transparent;
+    Icon { kind: root.asc ? "sort-asc" : "sort-desc"; x: 8px; y: 8px; width: 14px; height: 14px; fg: Tokens.accent; }
+    Text { x: 32px; y: 0px; height: parent.height; text: root.label; color: Tokens.text; font-size: 12px; font-weight: 600; vertical-alignment: center; horizontal-alignment: left; }
+    ta := TouchArea { mouse-cursor: pointer; clicked => { root.triggered(); } }
+}
+
+// Tiny sort-direction arrow (Path-based so it scales, unlike the fixed 16px Icon glyph). Shown
+// on the active column header. Up triangle = ascending, down triangle = descending.
+component SortArrow inherits Rectangle {
+    in property <bool> asc: true;
+    in property <color> fg: Tokens.accent;
+    width: 8px; height: 10px; background: transparent;
+    Path {
+        x: 0px; y: 0px; width: 8px; height: 10px;
+        commands: root.asc ? "M4 0 L8 7 L0 7 Z" : "M0 3 L8 3 L4 10 Z";
+        fill: root.fg; stroke: transparent; stroke-width: 0px;
+    }
+}
+
+// A clickable column-header cell. `key` is this column's sort key; `active-key`/`active-dir` are
+// the pane's current sort state (drives the active highlight + arrow). Clicking emits the key.
+component SortHeader inherits Rectangle {
+    in property <string> label;
+    in property <string> key;
+    in property <string> active-key;
+    in property <string> active-dir;
+    in property <bool> right-align: false;
+    callback clicked-with(string);
+    // No explicit height: in the column-header HorizontalLayout (24px) the cell stretches to fill
+    // the cross-axis by default — same as the plain Text headers did. An explicit `height: 100%`
+    // here resolved to the WINDOW height in Slint, growing this row and collapsing the file list
+    // below it to 0 (empty panes).
+    property <bool> active: root.active-key == root.key;
+    TouchArea { mouse-cursor: pointer; clicked => { root.clicked-with(root.key); } }
+    VerticalLayout { alignment: center;
+        HorizontalLayout {
+            spacing: 4px;
+            alignment: root.right-align ? end : start;
+            // For right-aligned columns (MODIFIED/SIZE) the arrow sits BEFORE the label so the
+            // label's right edge stays flush with the data. For the left-aligned NAME column the
+            // arrow sits AFTER the label, so the label stays anchored at x=0 (aligned with the file
+            // names below) instead of shifting ~12px right when it becomes the active sort.
+            if root.active && root.right-align : SortArrow { asc: root.active-dir == "asc"; fg: Tokens.accent; }
+            Text {
+                text: root.label;
+                color: root.active ? Tokens.text : Tokens.text-ter;
+                font-size: 10px; font-weight: 800; vertical-alignment: center;
+                horizontal-alignment: root.right-align ? right : left;
+            }
+            if root.active && !root.right-align : SortArrow { asc: root.active-dir == "asc"; fg: Tokens.accent; }
+        }
+    }
+}
+
+export component App inherits Window {
+    title: "gmacFTP";
+    no-frame: true;
+    resize-border-width: 7px;
+    preferred-width: 1180px;
+    preferred-height: 740px;
+    background: transparent;
+    default-font-family: "Inter";
+
+    in property <[ConnRow]> connections;
+    in property <[ConnRow]> sessions;   // active background sessions (CONNECTED section)
+    in property <[ConnRow]> filtered-connections;
+    in property <[ConnRow]> filtered-sessions;
+    in property <[ConnRow]> palette-connections;
+    in property <[LocalFavoriteRow]> local-favorites;
+    in-out property <[EntryRow]> local-entries;
+    in-out property <[EntryRow]> remote-entries;
+    in-out property <[EntryRow]> local-full;
+    in-out property <[EntryRow]> remote-full;
+    in-out property <string> local-cwd: "/";
+    in-out property <string> remote-cwd: "/";
+    in-out property <string> local-path-display: "/";
+    in-out property <string> remote-path-display: "/";
+    in-out property <int> active-connection: -1;
+    in-out property <bool> is-connecting: false;
+    in-out property <bool> local-loading: false;
+    in-out property <bool> remote-loading: false;
+    property <int> metadata-pulse: 0;
+    in-out property <string> status: "";
+    in-out property <string> error: "";
+    in-out property <string> active-host: "";
+
+    Timer {
+        interval: 320ms;
+        running: true;
+        triggered => { root.metadata-pulse = root.metadata-pulse == 2 ? 0 : root.metadata-pulse + 1; }
+    }
+    in-out property <int> local-selected: -1;
+    in-out property <int> remote-selected: -1;
+    in-out property <bool> transfer-active: false;
+    in-out property <int> transfer-done: 0;
+    in-out property <int> transfer-total: 0;
+    in-out property <float> transfer-fraction: 0.0;
+    in-out property <string> transfer-label: "";
+    in-out property <string> transfer-progress-text: "";
+    in-out property <bool> palette-open: false;
+    in-out property <string> palette-query: "";
+    in-out property <string> server-filter: "";
+    in-out property <bool> manager-open: false;
+    in-out property <bool> editor-open: false;
+    in-out property <int> editor-id: -1;
+    in-out property <string> editor-name: "";
+    in-out property <string> editor-host: "";
+    in-out property <string> editor-port: "21";
+    in-out property <string> editor-user: "";
+    in-out property <string> editor-password: "";
+    in-out property <string> editor-protocol: "ftp";
+    in-out property <string> manager-message: "";
+    in-out property <bool> accept-any-cert: true;
+    in-out property <bool> show-hidden: false;
+    in-out property <string> local-sort-key: "name";
+    in-out property <string> local-sort-dir: "asc";
+    in-out property <string> remote-sort-key: "name";
+    in-out property <string> remote-sort-dir: "asc";
+    in-out property <string> selected-path: "";      // full path of the active pane's selected entry (bottom bar, copyable)
+    in-out property <bool> overwrite-open: false;    // overwrite-conflict dialog open?
+    in-out property <string> overwrite-name: "";     // name of the clashing file (shown in the dialog)
+    in-out property <bool> sort-open: false;          // sort popover open?
+    in-out property <string> sort-pane: "local";      // which pane the sort popover targets
+    in-out property <int> local-count: 0;
+    in-out property <int> remote-count: 0;
+    // active pane ("local" | "remote"), sidebar selection (no auto-connect), transfer panel
+    in-out property <string> active-pane: "local";
+    in-out property <int> selected-connection: -1;
+    in-out property <[TransferRow]> transfer-jobs;
+    in-out property <string> transfer-summary: "0 transfers";
+    in-out property <bool> transfer-panel-open: false;
+    in-out property <bool> transfers-paused: false;   // engine pause-all toggle (transfer panel)
+    // Tier 2: each pane is independently "local" or a remote host
+    in-out property <string> left-kind: "local";
+    in-out property <string> right-kind: "local";
+    in-out property <string> left-host: "";
+    in-out property <string> right-host: "";
+    in-out property <string> left-protocol: "";
+    in-out property <string> right-protocol: "";
+    in-out property <int> left-conn-id: -1;
+    in-out property <int> right-conn-id: -1;
+    // draggable left/right pane split (left pane width in px)
+    in-out property <length> pane-split: 440px;
+    // context-menu state (custom overlay driven by right-click via pointer-event)
+    in-out property <bool> ctx-open: false;
+    in-out property <length> ctx-x: 0px;
+    in-out property <length> ctx-y: 0px;
+    in-out property <string> ctx-pane: "";       // "local" | "remote"
+    in-out property <int> ctx-index: -1;
+    in-out property <string> ctx-name: "";
+    in-out property <bool> ctx-is-dir: false;
+    // delete-confirmation dialog (right-click → Delete opens this before trashing/deleting)
+    in-out property <bool> delete-open: false;
+    in-out property <string> delete-pane: "";
+    in-out property <string> delete-name: "";
+    in-out property <string> delete-path: "";
+    in-out property <bool> delete-is-dir: false;
+    in-out property <bool> delete-dont-ask: false;   // "Don't ask again this session" checkbox
+
+    // drag & drop state (internal, pane-to-pane transfer). A plain click never activates a
+    // drag — only a left-press moved > 5px does — so existing click/double-click behaviour
+    // is untouched. On release over the opposite pane, the matching upload/download fires.
+    in-out property <bool> drag-active: false;
+    in-out property <bool> native-drag-started: false;
+    in-out property <bool> external-drop-active: false;
+    in-out property <int> external-drop-pane: -1;
+    in-out property <bool> drag-pressed: false;
+    in-out property <length> drag-x: 0px;
+    in-out property <length> drag-y: 0px;
+    in-out property <length> drag-start-x: 0px;
+    in-out property <length> drag-start-y: 0px;
+    in-out property <string> drag-source: "";    // "local" | "remote"
+    in-out property <int> drag-index: -1;
+    in-out property <string> drag-name: "";
+    in-out property <bool> drag-is-dir: false;
+    in-out property <int> favorite-drag-index: -1;
+    in-out property <int> favorite-drop-index: -1;
+    in-out property <length> favorite-list-y: 0px;
+    in-out property <int> saved-drag-index: -1;
+    in-out property <int> saved-drag-id: -1;
+    in-out property <int> saved-drop-index: -1;
+    in-out property <length> saved-list-y: 0px;
+    // pane under the cursor while dragging ("" when idle). Sidebar=240px; the local pane is
+    // `pane-split` wide, then a 48px center divider, then the remote pane — so the real
+    // boundary is 240px + pane-split (+half the divider). Using the old 50/50 midpoint
+    // mis-targeted drops whenever the user resized the splitter.
+    out property <string> drag-target:
+        !root.drag-active ? "" : (root.drag-x > 240px + root.pane-split + 24px ? "remote" : "local");
+    out property <bool> drag-source-local-dir:
+        root.drag-is-dir && ((root.drag-source == "local" && root.left-kind == "local") || (root.drag-source == "remote" && root.right-kind == "local"));
+    out property <bool> drag-over-favorites:
+        root.drag-active && root.drag-source-local-dir && root.drag-x < 240px && root.drag-y > 100px && root.drag-y < 330px;
+    out property <bool> favorite-dragging:
+        root.drag-active && root.drag-source == "favorite";
+    out property <bool> favorite-drag-over-list:
+        root.favorite-dragging && root.drag-x < 240px && root.drag-y >= root.favorite-list-y - 8px && root.drag-y <= root.favorite-list-y + root.local-favorites.length * 30px + 8px;
+    out property <bool> favorite-remove-target:
+        root.favorite-dragging && !root.favorite-drag-over-list;
+    out property <bool> saved-dragging:
+        root.drag-active && root.drag-source == "server";
+    out property <bool> saved-drag-over-list:
+        root.saved-dragging && root.drag-x < 240px && root.drag-y >= root.saved-list-y - 8px && root.drag-y <= root.saved-list-y + root.filtered-connections.length * 32px + 8px;
+
+    callback connect-to(int);
+    callback disconnect();
+    callback refresh();
+    callback navigate-local(string);
+    callback navigate-remote(string);
+    callback nav-local-back();
+    callback nav-local-forward();
+    callback nav-local-up();
+    callback nav-remote-back();
+    callback nav-remote-forward();
+    callback nav-remote-up();
+    callback download();
+    callback upload();
+    callback toggle-locale();
+    callback toggle-tls();
+    callback toggle-hidden();
+    callback toggle-theme();
+    callback sort-local(string);
+    callback sort-remote(string);
+    callback new-connection();
+    callback edit-connection(int);
+    callback delete-connection(int);
+    callback save-connection();
+    callback filter-palette(string);
+    callback import-forklift();
+    callback copy-path(string, string);   // (pane, name) → Rust surfaces the path in status
+    callback update-selected-path();      // recompute the bottom-bar path for the active pane's selection
+    callback copy-selected-path();        // copy the bottom-bar path to the clipboard
+    callback apply-sort-field(string);    // set the sort-pane's sort key + re-apply the view
+    callback toggle-sort-dir();           // toggle the sort-pane's asc/desc + re-apply
+    callback resolve-overwrite(int);      // overwrite dialog: 0=cancel, 1=overwrite, 2=save-as-new
+    callback request-delete(string, string, bool); // intend-to-delete (pane, name, is_dir) → opens dialog or deletes if "don't ask" is on
+    callback confirm-delete();             // delete-dialog "Delete" button → honour checkbox, delete, close
+    callback activate-pane(string);        // "local" | "remote"
+    callback select-connection(int);       // sidebar select (no connect)
+    callback connect-selected-to-pane(string); // open the selected server into a pane
+    callback clear-finished-transfers();   // remove done/failed rows from the transfer panel
+    callback dismiss-transfer(int);        // remove one transfer row by id (the per-row ✕)
+    callback set-transfers-paused(bool);   // engine: pause/resume dequeue of new transfers
+    callback set-pane-local(int);          // switch a pane (0|1) back to the local filesystem
+    callback disconnect-pane(int);         // disconnect a specific pane (0|1) — sidebar eject
+    callback switch-to-session(int);       // click a CONNECTED session → show it in the active pane
+    callback disconnect-session(int);      // eject a session from the background pool entirely
+    callback open-local-favorite(string);  // open a concrete local favorite path in the left pane
+    callback add-local-favorite(string, int); // (pane alias, row index) → persist selected local folder in Favorites
+    callback reorder-local-favorite(int, int); // from index, insertion index
+    callback remove-local-favorite(int);       // remove from Favorites only; never deletes disk folder
+    callback reorder-saved-connection(int, int); // connection id, insertion index in current Saved view
+    callback move-selection(int);          // keyboard: move active-pane selection by ±1 (arrows)
+    callback type-ahead(string);           // keyboard: jump to first entry starting with letter
+    callback pane-preview();               // keyboard: Quick Look (space)
+    callback pane-enter();                 // keyboard: copy selected to the other pane (enter)
+    callback pane-delete();                // keyboard: delete selected in active pane (del)
+    callback filter-servers(string);        // sidebar search filter
+    callback start-window-drag();           // frameless titlebar drag, handled by winit on macOS
+    callback minimize-window();
+    callback toggle-window-fullscreen();
+    callback close-window();
+    callback start-external-drag(string, int);
+
+    FocusScope {
+        key-pressed(e) => {
+            // Global shortcuts — on macOS the Command key is Slint's `control` modifier.
+            if (e.modifiers.control && (e.text == "k" || e.text == "K")) { root.palette-open = true; accept }
+            else if (e.modifiers.control && (e.text == "n" || e.text == "N")) { root.new-connection(); accept }
+            else if (e.modifiers.control && (e.text == "t" || e.text == "T")) { root.toggle-theme(); accept }
+            else if (e.text == Key.Escape) { root.palette-open = false; root.manager-open = false; root.editor-open = false; root.ctx-open = false; root.sort-open = false; root.delete-open = false; root.drag-active = false; root.drag-pressed = false; accept }
+            // keyboard control of the active file pane (only when no overlay/input is open)
+            else if (!root.palette-open && !root.manager-open && !root.editor-open && !root.ctx-open) {
+                if (e.text == Key.UpArrow) { root.move-selection(-1); accept }
+                else if (e.text == Key.DownArrow) { root.move-selection(1); accept }
+                else if (e.text == Key.Return) { root.pane-enter(); accept }
+                else if (e.text == Key.Delete || e.text == Key.Backspace) { root.pane-delete(); accept }
+                else if (e.text == Key.Space || e.text == " ") { root.pane-preview(); accept }
+                else { root.type-ahead(e.text); reject }
+            }
+            else { reject }
+        }
+
+        Rectangle {
+            background: Tokens.bg;
+            border-width: 1px;
+            border-color: Tokens.border;
+            border-radius: 10px;
+            clip: true;
+
+            VerticalLayout {
+                // ── toolbar ──
+                Rectangle {
+                height: 52px; background: Tokens.surface;
+                border-width: 1px; border-color: Tokens.border;
+
+                toolbar_drag := TouchArea {
+                    mouse-cursor: default;
+                    pointer-event(event) => {
+                        if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
+                            root.start-window-drag();
+                        }
+                    }
+                }
+
+                HorizontalLayout {
+                    padding-left: 13px; padding-right: 14px; padding-top: 11px; padding-bottom: 11px; spacing: 6px;
+                    VerticalLayout {
+                        width: 14px; alignment: center;
+                        TrafficButton { fill: #FF5F57; mark: "x"; clicked => { root.close-window(); } }
+                    }
+                    VerticalLayout {
+                        width: 14px; alignment: center;
+                        TrafficButton { fill: #FFBD2E; mark: "-"; clicked => { root.minimize-window(); } }
+                    }
+                    VerticalLayout {
+                        width: 14px; alignment: center;
+                        TrafficButton { fill: #28C840; mark: "+"; clicked => { root.toggle-window-fullscreen(); } }
+                    }
+                    Rectangle { width: 4px; background: transparent; }
+                    BrandWordmark { }
+                    // Host pill keeps the toolbar geometry stable even before a pane is connected.
+                    VerticalLayout {
+                        width: 188px; alignment: center;
+                        Rectangle {
+                            width: 188px; height: 26px; border-radius: 13px;
+                            background: Tokens.accent-soft;
+                            HorizontalLayout { padding-left: 10px; padding-right: 10px; spacing: 8px; alignment: center;
+                                Rectangle {
+                                    width: 7px; height: 26px; background: transparent;
+                                    VerticalLayout { alignment: center;
+                                        Rectangle {
+                                            width: 7px; height: 7px; border-radius: 4px;
+                                            background: (root.left-kind == "remote" || root.right-kind == "remote" || root.active-host != "") ? Tokens.success : Tokens.text-ter;
+                                        }
+                                    }
+                                }
+                                Text {
+                                    text: root.active-host != "" ? root.active-host
+                                        : (root.active-pane == "local" && root.left-kind == "remote" ? root.left-host
+                                        : (root.active-pane == "remote" && root.right-kind == "remote" ? root.right-host
+                                        : (root.left-kind == "remote" ? root.left-host
+                                        : (root.right-kind == "remote" ? root.right-host : I18n.not-connected))));
+                                    color: (root.left-kind == "remote" || root.right-kind == "remote" || root.active-host != "") ? Tokens.accent-text : Tokens.text-sec;
+                                    font-family: "JetBrains Mono"; font-size: 10px; vertical-alignment: center;
+                                    horizontal-stretch: 1;
+                                    overflow: elide;
+                                }
+                                Rectangle {
+                                    width: 1px; height: 26px; background: transparent;
+                                    Rectangle { y: 7px; width: 1px; height: 13px; background: Tokens.accent; opacity: 0.45; }
+                                }
+                                Text {
+                                    text: (root.active-pane == "local" && root.left-protocol != "") ? root.left-protocol
+                                        : ((root.active-pane == "remote" && root.right-protocol != "") ? root.right-protocol
+                                        : (root.left-protocol != "" ? root.left-protocol : (root.right-protocol != "" ? root.right-protocol : "FTP")));
+                                    color: (root.left-kind == "remote" || root.right-kind == "remote" || root.active-host != "") ? Tokens.accent-text : Tokens.text-sec;
+                                    font-size: 10px; font-weight: 600; vertical-alignment: center;
+                                }
+                            }
+                        }
+                    }
+                    Rectangle { horizontal-stretch: 1; }
+                    LabeledToolButton { width: 88px; icon: "refresh"; text: I18n.refresh; clicked => { root.refresh(); } }
+                    ToolDivider { }
+                    LabeledToolButton { width: 124px; icon: "activity"; text: "Transfers"; clicked => { root.transfer-panel-open = !root.transfer-panel-open; } }
+                    if root.transfer-jobs.length > 0 : VerticalLayout {
+                        width: 18px; alignment: center;
+                        Rectangle {
+                            width: 18px; height: 18px; border-radius: 9px; background: Tokens.accent;
+                            Text { text: root.transfer-jobs.length; color: #FFFFFF; font-size: 10px; font-weight: 800; horizontal-alignment: center; vertical-alignment: center; }
+                        }
+                    }
+                    ToolDivider { }
+                    LabeledToolButton { width: 95px; icon: "plug-zap"; text: I18n.connect; emphasized: true; disabled: root.selected-connection < 0 || (root.active-pane == "local" && root.local-loading) || (root.active-pane == "remote" && root.remote-loading); clicked => { root.connect-selected-to-pane(root.active-pane); } }
+                    LabeledToolButton { width: 111px; icon: "log-out"; text: I18n.disconnect; emphasized: true; danger-emphasis: true; disabled: (root.active-pane == "local" && root.local-loading) || (root.active-pane == "remote" && root.remote-loading) || !((root.active-pane == "local" && root.left-kind == "remote") || (root.active-pane == "remote" && root.right-kind == "remote")); clicked => { root.disconnect(); } }
+                    ToolDivider { }
+                    IconButton { icon: "shield"; on: root.accept-any-cert; clicked => { root.toggle-tls(); } }
+                    IconButton { icon: "eye"; on: root.show-hidden; clicked => { root.toggle-hidden(); } }
+                    IconButton { icon: Tokens.theme == "dark" ? "sun" : "moon"; clicked => { root.toggle-theme(); } }
+                    ToolDivider { }
+                    LabeledToolButton { width: 89px; icon: "server"; text: "Servers"; clicked => { root.manager-open = true; root.manager-message = ""; } }
+                }
+            }
+
+            // ── body ──
+            HorizontalLayout {
+                // sidebar
+                Rectangle {
+                    width: 240px; background: Tokens.bg-alt;
+                    border-width: 1px; border-color: Tokens.border;
+                    VerticalLayout {
+                        padding-top: 12px; padding-left: 14px; padding-right: 6px; padding-bottom: 12px; spacing: 10px;
+                        SearchField { text <=> root.server-filter; placeholder: "Filter servers..."; edited(query) => { root.filter-servers(query); } }
+                        SidebarScrollView {
+                            vertical-stretch: 1;
+                            VerticalLayout {
+                                spacing: 5px;
+                                // ── CONNECTED: active background sessions. Click a row to focus it into the active
+                                // pane (the previous session stays alive); click the eject icon to disconnect it. ──
+                                if (root.filtered-sessions.length > 0) : Rectangle {
+                                    height: 26px;
+                                    Text { text: I18n.connected + " · " + root.filtered-sessions.length; color: Tokens.text-ter; font-size: 11px; font-weight: 800; vertical-alignment: bottom; }
+                                }
+                                for s in root.filtered-sessions : Rectangle {
+                                    height: 42px; border-radius: Tokens.r-row;
+                                    background: (s.id == root.left-conn-id || s.id == root.right-conn-id) ? Tokens.sidebar-active : (s_touch.has-hover ? Tokens.row-hover : transparent);
+                                    // status dot — absolute, on the SAME x-axis as the CONNECTIONS rows (x16)
+                                    Rectangle { x: 12px; y: 17px; width: 7px; height: 7px; border-radius: 4px; background: Tokens.success; }
+                                    s_touch := TouchArea { mouse-cursor: pointer; clicked => { root.switch-to-session(s.id); } }
+                                    HorizontalLayout { padding-left: 29px; padding-right: 5px; padding-top: 5px; padding-bottom: 5px; spacing: 6px; alignment: center;
+                                        VerticalLayout { spacing: 2px; horizontal-stretch: 1;
+                                            Text { text: s.label; color: Tokens.text; font-size: 12px; font-weight: 800; vertical-alignment: center; overflow: elide; }
+                                            Text { text: s.sub; color: Tokens.text-sec; font-family: "JetBrains Mono"; font-size: 9px; overflow: elide; }
+                                        }
+                                        ProtocolBadge { protocol: s.protocol; compact: true; }
+                                        IconButton { icon: "log-out"; fg: Tokens.text-ter; clicked => { root.disconnect-session(s.id); } }
+                                    }
+                                }
+                                if root.server-filter == "" : Rectangle {
+                                    height: 28px;
+                                    background: root.drag-over-favorites || root.favorite-drag-over-list ? Tokens.accent-soft : transparent;
+                                    border-radius: Tokens.r-row;
+                                    Text { x: 10px; width: parent.width - 20px; text: I18n.favorites; color: root.drag-over-favorites || root.favorite-drag-over-list ? Tokens.accent-text : Tokens.text-ter; font-size: 11px; font-weight: 800; horizontal-alignment: left; vertical-alignment: bottom; }
+                                }
+                                if root.server-filter == "" : Rectangle {
+                                    height: root.local-favorites.length * 30px + (root.favorite-drag-over-list ? 2px : 0px);
+                                    background: root.favorite-remove-target ? Tokens.danger-soft : transparent;
+                                    border-radius: Tokens.r-row;
+                                    if root.favorite-drag-over-list : Rectangle {
+                                        x: 8px; y: root.favorite-drop-index * 30px; width: parent.width - 16px; height: 2px;
+                                        background: Tokens.accent;
+                                        border-radius: 1px;
+                                    }
+                                    VerticalLayout {
+                                        spacing: 0px;
+                                        for f[i] in root.local-favorites : Rectangle {
+                                            height: 30px; border-radius: Tokens.r-row;
+                                            opacity: root.favorite-dragging && root.favorite-drag-index == i ? 0.36 : 1.0;
+                                            background: root.favorite-dragging && root.favorite-drag-index == i ? Tokens.accent-soft : (fav_custom.has-hover ? Tokens.row-hover : transparent);
+                                            animate opacity { duration: 120ms; easing: ease-out; }
+                                            fav_custom := TouchArea {
+                                                mouse-cursor: pointer;
+                                                clicked => { if (!root.favorite-dragging) { root.open-local-favorite(f.path); } }
+                                                pointer-event(pe) => {
+                                                    if (pe.button == PointerEventButton.left || pe.kind == PointerEventKind.move || pe.kind == PointerEventKind.up) {
+                                                        if (pe.kind == PointerEventKind.down) {
+                                                            root.drag-source = "favorite"; root.drag-index = i; root.favorite-drag-index = i; root.favorite-drop-index = i;
+                                                            root.drag-name = f.label; root.drag-is-dir = true;
+                                                            root.drag-pressed = true; root.drag-active = false;
+                                                            root.drag-start-x = self.absolute-position.x + self.mouse-x;
+                                                            root.drag-start-y = self.absolute-position.y + self.mouse-y;
+                                                            root.favorite-list-y = self.absolute-position.y - i * 30px;
+                                                        } else if (pe.kind == PointerEventKind.move && root.drag-pressed && root.drag-source == "favorite") {
+                                                            root.drag-x = self.absolute-position.x + self.mouse-x;
+                                                            root.drag-y = self.absolute-position.y + self.mouse-y;
+                                                            if (!root.drag-active &&
+                                                                (abs(root.drag-x - root.drag-start-x) > 5px ||
+                                                                 abs(root.drag-y - root.drag-start-y) > 5px)) {
+                                                                root.drag-active = true;
+                                                            }
+                                                            if (root.drag-active && root.favorite-drag-over-list) {
+                                                                root.favorite-drop-index = Fmt.favorite-drop-index(root.drag-y, root.favorite-list-y, root.local-favorites.length);
+                                                            }
+                                                        } else if (pe.kind == PointerEventKind.up && root.drag-source == "favorite") {
+                                                            if (root.drag-active) {
+                                                                if (root.favorite-remove-target) {
+                                                                    root.remove-local-favorite(root.favorite-drag-index);
+                                                                } else if (root.favorite-drag-over-list) {
+                                                                    root.reorder-local-favorite(root.favorite-drag-index, root.favorite-drop-index);
+                                                                }
+                                                            }
+                                                            root.drag-pressed = false; root.drag-active = false; root.drag-source = "";
+                                                            root.favorite-drag-index = -1; root.favorite-drop-index = -1;
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            HorizontalLayout { padding-left: 8px; padding-right: 8px; spacing: 9px; alignment: start;
+                                                if f.path == "~" : Rectangle {
+                                                    width: 20px; height: 30px; background: transparent;
+                                                    Icon { kind: "home"; x: 1px; y: 7px; width: 16px; height: 16px; fg: Tokens.folder; }
+                                                }
+                                                if f.path != "~" : FileIcon { is-dir: true; }
+                                                Text { text: f.label; color: Tokens.text; font-size: 12px; vertical-alignment: center; overflow: elide; }
+                                            }
+                                        }
+                                    }
+                                }
+                                Rectangle {
+                                    height: 28px;
+                                    Text { x: 10px; width: parent.width - 56px; text: "SERVERS"; color: Tokens.text-ter; font-size: 11px; font-weight: 800; horizontal-alignment: left; vertical-alignment: bottom; }
+                                    Rectangle {
+                                        x: parent.width - 34px; y: 2px; width: 28px; height: 24px;
+                                        border-radius: 6px;
+                                        background: add_srv.has-hover ? Tokens.row-hover : transparent;
+                                        Icon { kind: "plus"; width: 15px; height: 15px; fg: add_srv.has-hover ? Tokens.text : Tokens.text-sec; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; }
+                                        add_srv := TouchArea { mouse-cursor: pointer; clicked => { root.new-connection(); } }
+                                    }
+                                }
+                                // ── SAVED ──
+                                Rectangle {
+                                    height: 28px;
+                                    Text { x: 10px; width: parent.width - 20px; text: I18n.saved + " · " + root.filtered-connections.length; color: Tokens.text-ter; font-size: 11px; font-weight: 800; horizontal-alignment: left; vertical-alignment: bottom; }
+                                }
+                                if root.filtered-connections.length == 0 : Rectangle {
+                                    height: 64px;
+                                    Text { text: root.server-filter == "" ? "No servers yet.\nUse CONNECTIONS to add\nor import from ForkLift." : "No matching servers."; color: Tokens.text-sec; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; wrap: word-wrap; }
+                                }
+                                if root.filtered-connections.length > 0 : Rectangle {
+                                    height: root.filtered-connections.length * 32px + (root.saved-drag-over-list ? 2px : 0px);
+                                    border-radius: Tokens.r-row;
+                                    background: root.saved-drag-over-list ? Tokens.accent-soft : transparent;
+                                    if root.saved-drag-over-list : Rectangle {
+                                        x: 8px; y: root.saved-drop-index * 32px; width: parent.width - 16px; height: 2px;
+                                        background: Tokens.accent;
+                                        border-radius: 1px;
+                                    }
+                                    VerticalLayout {
+                                        spacing: 0px;
+                                        for c[i] in root.filtered-connections : Rectangle {
+                                            height: 32px;
+                                            opacity: root.saved-dragging && root.saved-drag-id == c.id ? 0.36 : 1.0;
+                                            animate opacity { duration: 120ms; easing: ease-out; }
+                                            // connected saved-servers show just the green dot here; the live "active" tint lives
+                                            // in the CONNECTED section above, so the two states no longer look identical.
+                                            background: root.saved-dragging && root.saved-drag-id == c.id ? Tokens.accent-soft : (c.id == root.selected-connection ? Tokens.row-hover : (c_touch.has-hover ? Tokens.row-hover : transparent));
+                                            border-radius: Tokens.r-row;
+                                            if (c.id == root.left-conn-id || c.id == root.right-conn-id) : Rectangle { x: 0; y: 8px; width: 3px; height: 16px; background: Tokens.accent; border-radius: 2px; }
+                                            if c.id == root.selected-connection && !(c.id == root.left-conn-id || c.id == root.right-conn-id) : Rectangle { x: 0; y: 8px; width: 3px; height: 16px; background: Tokens.text-ter; border-radius: 2px; }
+                                            // Connection-status dot. Positioned absolutely (like the stripe above) because a
+                                            // y-pinned child of the HorizontalLayout did not render in the software renderer.
+                                            Rectangle { x: 12px; y: 13px; width: 7px; height: 7px; border-radius: 4px; background: (c.id == root.left-conn-id || c.id == root.right-conn-id) ? Tokens.success : Tokens.border-strong; }
+                                            c_touch := TouchArea {
+                                                mouse-cursor: pointer;
+                                                clicked => { root.selected-connection = c.id; root.select-connection(c.id); }
+                                                double-clicked => { root.selected-connection = c.id; root.connect-selected-to-pane(root.active-pane); }
+                                                pointer-event(pe) => {
+                                                    if (pe.button == PointerEventButton.left || pe.kind == PointerEventKind.move || pe.kind == PointerEventKind.up) {
+                                                        if (pe.kind == PointerEventKind.down) {
+                                                            root.drag-source = "server"; root.drag-index = i; root.saved-drag-index = i; root.saved-drag-id = c.id; root.saved-drop-index = i;
+                                                            root.drag-name = c.label; root.drag-is-dir = false;
+                                                            root.drag-pressed = true; root.drag-active = false;
+                                                            root.drag-start-x = self.absolute-position.x + self.mouse-x;
+                                                            root.drag-start-y = self.absolute-position.y + self.mouse-y;
+                                                            root.saved-list-y = self.absolute-position.y - i * 32px;
+                                                        } else if (pe.kind == PointerEventKind.move && root.drag-pressed && root.drag-source == "server") {
+                                                            root.drag-x = self.absolute-position.x + self.mouse-x;
+                                                            root.drag-y = self.absolute-position.y + self.mouse-y;
+                                                            if (!root.drag-active &&
+                                                                (abs(root.drag-x - root.drag-start-x) > 5px ||
+                                                                 abs(root.drag-y - root.drag-start-y) > 5px)) {
+                                                                root.drag-active = true;
+                                                            }
+                                                            if (root.drag-active && root.saved-drag-over-list) {
+                                                                root.saved-drop-index = Fmt.saved-drop-index(root.drag-y, root.saved-list-y, root.filtered-connections.length);
+                                                            }
+                                                        } else if (pe.kind == PointerEventKind.up && root.drag-source == "server") {
+                                                            if (root.drag-active && root.saved-drag-over-list) {
+                                                                root.reorder-saved-connection(root.saved-drag-id, root.saved-drop-index);
+                                                            }
+                                                            root.drag-pressed = false; root.drag-active = false; root.drag-source = "";
+                                                            root.saved-drag-index = -1; root.saved-drag-id = -1; root.saved-drop-index = -1;
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            Text {
+                                                x: 29px; y: 0px; width: parent.width - 106px; height: parent.height;
+                                                text: c.label; color: Tokens.text; font-size: 12px; font-weight: c.id == root.active-connection ? 800 : 600;
+                                                vertical-alignment: center; overflow: elide;
+                                            }
+                                            ProtocolBadge { x: parent.width - 72px; y: 7px; protocol: c.protocol; compact: true; }
+                                            Rectangle {
+                                                x: parent.width - 30px; y: 1px; width: 28px; height: 30px;
+                                                border-radius: 6px;
+                                                background: login_touch.has-hover ? Tokens.row-hover : transparent;
+                                                Icon {
+                                                    kind: "log-in"; fg: login_touch.has-hover ? Tokens.text : Tokens.text-ter;
+                                                    x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+                                                }
+                                                login_touch := TouchArea {
+                                                    mouse-cursor: pointer;
+                                                    clicked => { root.selected-connection = c.id; root.connect-selected-to-pane(root.active-pane); }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        // (Connect/Disconnect moved to the toolbar)
+                    }
+                }
+
+                // dual pane
+                HorizontalLayout {
+                    // local
+                    VerticalLayout {
+                        width: root.pane-split;
+                        Rectangle {
+                            height: 48px;
+                            background: root.active-pane == "local"
+                                ? Tokens.pane-active
+                                : (root.drag-active && root.drag-source == "remote" && root.drag-target == "local" ? #007AFF26 : Tokens.surface);
+                            border-width: 1px;
+                            border-color: (root.drag-active && root.drag-source == "remote" && root.drag-target == "local") ? Tokens.accent : Tokens.border;
+                            if root.active-pane == "local" : Rectangle { x: 0; y: 0; width: parent.width; height: 2px; background: Tokens.accent; }
+                            TouchArea { clicked => { root.active-pane = "local"; root.activate-pane("local"); } }
+                            HorizontalLayout { padding-left: 12px; padding-right: 10px; padding-top: 8px; padding-bottom: 8px; spacing: 10px; alignment: center;
+                                PaneBadge { text: root.left-kind == "local" ? I18n.local : "REMOTE"; fill: root.left-kind == "local" ? Tokens.accent : Tokens.brand; }
+                                Text {
+                                    text: root.local-path-display;
+                                    color: Tokens.text-sec;
+                                    font-family: "JetBrains Mono"; font-size: 12px; horizontal-stretch: 1; vertical-alignment: center; horizontal-alignment: left; overflow: elide;
+                                }
+                                IconButton { icon: "arrow-left"; disabled: root.local-loading; clicked => { root.nav-local-back(); } }
+                                IconButton { icon: "arrow-right"; disabled: root.local-loading; clicked => { root.nav-local-forward(); } }
+                                IconButton { icon: "chevron-up"; disabled: root.local-loading; clicked => { root.nav-local-up(); } }
+                                IconButton { icon: "home"; disabled: root.local-loading; clicked => { root.set-pane-local(0); } }
+                            }
+                        }
+                        // column headers — clickable: sort by that column (toggle asc/desc if active)
+                        Rectangle {
+                            height: 24px; background: Tokens.bg;
+                            HorizontalLayout { padding-left: 14px; padding-right: 14px; spacing: 10px; alignment: center;
+                                Rectangle { width: 20px; }
+                                SortHeader { horizontal-stretch: 1; label: "NAME"; key: "name"; active-key: root.local-sort-key; active-dir: root.local-sort-dir; clicked-with(k) => { root.sort-local(k); } }
+                                SortHeader { width: 84px; label: "MODIFIED"; key: "date"; active-key: root.local-sort-key; active-dir: root.local-sort-dir; right-align: true; clicked-with(k) => { root.sort-local(k); } }
+                                SortHeader { width: 52px; label: "SIZE"; key: "size"; active-key: root.local-sort-key; active-dir: root.local-sort-dir; right-align: true; clicked-with(k) => { root.sort-local(k); } }
+                            }
+                            Rectangle { x: 0; y: parent.height - 1px; width: parent.width; height: 1px; background: Tokens.border; }
+                        }
+                        Rectangle {
+                            background: Tokens.bg; horizontal-stretch: 1;
+                            if root.local-loading : Rectangle {
+                                width: parent.width; height: parent.height; background: Tokens.bg;
+                                Icon { kind: "activity"; width: 24px; height: 24px; fg: Tokens.accent; x: (parent.width - self.width) / 2; y: parent.height / 2 - 26px; }
+                                Text { text: "Loading..."; color: Tokens.text-sec; font-size: 12px; font-weight: 600; width: parent.width; height: 18px; y: parent.height / 2 + 6px; horizontal-alignment: center; vertical-alignment: center; }
+                            }
+                            if !root.local-loading : FileScrollView {
+                                width: parent.width; height: parent.height;
+                                VerticalLayout {
+                                    spacing: 0px;
+                                    for e[i] in root.local-entries : Rectangle {
+                                        height: 30px;
+                                        background: i == root.local-selected
+                                            ? (root.active-pane == "local" ? Tokens.selection : Tokens.row-hover)
+                                            : (l_touch.has-hover ? Tokens.row-hover : transparent);
+                                        l_touch := TouchArea {
+                                            mouse-cursor: pointer;
+                                            clicked => { root.local-selected = i; root.active-pane = "local"; root.activate-pane("local"); root.update-selected-path(); }
+                                            double-clicked => { if (e.is-dir) { root.navigate-local(e.name); } }
+                                            pointer-event(pe) => {
+                                                if (pe.button == PointerEventButton.right && pe.kind == PointerEventKind.down) {
+                                                    root.local-selected = i;
+                                                    root.ctx-pane = "local"; root.ctx-index = i; root.ctx-name = e.name; root.ctx-is-dir = e.is-dir;
+                                                    root.ctx-x = self.absolute-position.x + self.mouse-x;
+                                                    root.ctx-y = self.absolute-position.y + self.mouse-y;
+                                                    root.ctx-open = true;
+                                                } else if (pe.button == PointerEventButton.left || pe.kind == PointerEventKind.move || pe.kind == PointerEventKind.up) {
+                                                    if (pe.kind == PointerEventKind.down) {
+                                                        root.drag-source = "local"; root.drag-index = i; root.drag-name = e.name;
+                                                        root.drag-is-dir = e.is-dir;
+                                                        root.drag-pressed = true; root.drag-active = false;
+                                                        root.drag-start-x = self.absolute-position.x + self.mouse-x;
+                                                        root.drag-start-y = self.absolute-position.y + self.mouse-y;
+                                                    } else if (pe.kind == PointerEventKind.move && root.drag-pressed) {
+                                                        root.drag-x = self.absolute-position.x + self.mouse-x;
+                                                        root.drag-y = self.absolute-position.y + self.mouse-y;
+                                                        if (!root.drag-active &&
+                                                            (abs(root.drag-x - root.drag-start-x) > 5px ||
+                                                             abs(root.drag-y - root.drag-start-y) > 5px)) {
+                                                            root.drag-active = true;
+                                                        }
+                                                        if (root.drag-active && !root.native-drag-started &&
+                                                            (root.drag-x < 0px || root.drag-x > root.width || root.drag-y < 0px || root.drag-y > root.height)) {
+                                                            root.native-drag-started = true;
+                                                            root.start-external-drag("local", i);
+                                                        }
+                                                    } else if (pe.kind == PointerEventKind.up) {
+                                                        // dropped — complete transfer if it ended over the remote pane
+                                                        if (root.drag-active) {
+                                                            if (root.drag-over-favorites) {
+                                                                root.add-local-favorite(root.drag-source, root.drag-index);
+                                                            } else if (root.drag-source == "local" && root.drag-target == "remote") {
+                                                                root.local-selected = root.drag-index; root.upload();
+                                                            } else if (root.drag-source == "remote" && root.drag-target == "local") {
+                                                                root.remote-selected = root.drag-index; root.download();
+                                                            }
+                                                        }
+                                                        root.drag-pressed = false; root.drag-active = false;
+                                                        root.native-drag-started = false;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        HorizontalLayout { padding-left: 14px; padding-right: 14px; spacing: 10px;
+                                            FileIcon { is-dir: e.is-dir; selected: i == root.local-selected && root.active-pane == "local"; }
+                                            Text { text: e.name; color: i == root.local-selected && root.active-pane == "local" ? Tokens.selection-text : Tokens.text; font-size: 13px; font-weight: i == root.local-selected ? 600 : 400; horizontal-stretch: 1; vertical-alignment: center; overflow: elide; }
+                                            Text { text: e.date; color: i == root.local-selected && root.active-pane == "local" ? #FFFFFFCC : Tokens.text-sec; font-family: "JetBrains Mono"; font-size: 10px; width: 84px; vertical-alignment: center; horizontal-alignment: right; }
+                                            MetadataSizeCell {
+                                                text: e.size-text;
+                                                state: e.metadata-state;
+                                                selected: i == root.local-selected && root.active-pane == "local";
+                                                pulse: root.metadata-pulse;
+                                            }
+                                        }
+                                    }
+                                    if root.local-entries.length == 0 : Text { text: " "; color: Tokens.text-ter; }
+                                }
+                            }
+                            if root.external-drop-active && root.external-drop-pane == 0 : Rectangle {
+                                width: parent.width; height: parent.height;
+                                background: Tokens.accent-soft.transparentize(0.18);
+                                border-width: 2px; border-color: Tokens.accent; border-radius: 6px;
+                                Icon { kind: "download"; width: 24px; height: 24px; fg: Tokens.accent; x: (parent.width - self.width) / 2; y: parent.height / 2 - 28px; }
+                                Text { text: "Copy here"; color: Tokens.accent-text; font-size: 13px; font-weight: 700; width: parent.width; height: 20px; y: parent.height / 2 + 6px; horizontal-alignment: center; vertical-alignment: center; }
+                            }
+                        }
+                    }
+
+                    // center transfer column: drag to resize panes; click arrows to transfer
+                    Rectangle {
+                        width: 48px; background: Tokens.bg-alt;
+                        Rectangle { x: (parent.width - 1px) / 2; width: 1px; height: parent.height; background: Tokens.border; }
+                        TouchArea {
+                            mouse-cursor: pointer;
+                            pointer-event(pe) => {
+                                if (pe.kind == PointerEventKind.move && self.pressed) {
+                                    root.pane-split = clamp(self.absolute-position.x + self.mouse-x - 240px, 220px, root.width - 240px - 240px);
+                                }
+                            }
+                        }
+                        dl := IconButton { icon: "arrow-left"; x: (parent.width - dl.width) / 2; y: parent.height / 2 - dl.height - 4px; clicked => { root.download(); } }
+                        ul := IconButton { icon: "arrow-right"; x: (parent.width - ul.width) / 2; y: parent.height / 2 + 4px; clicked => { root.upload(); } }
+                    }
+
+                    // remote
+                    VerticalLayout {
+                        Rectangle {
+                            height: 48px;
+                            background: root.active-pane == "remote"
+                                ? (root.right-kind == "local" ? Tokens.pane-active : (Tokens.theme == "dark" ? #281B36 : #F5EAFE))
+                                : (root.drag-active && root.drag-source == "local" && root.drag-target == "remote" ? #007AFF26 : Tokens.surface);
+                            border-width: 1px;
+                            border-color: (root.drag-active && root.drag-source == "local" && root.drag-target == "remote") ? Tokens.accent : Tokens.border;
+                            if root.active-pane == "remote" : Rectangle { x: 0; y: 0; width: parent.width; height: 2px; background: root.right-kind == "local" ? Tokens.accent : Tokens.brand; }
+                            TouchArea { clicked => { root.active-pane = "remote"; root.activate-pane("remote"); } }
+                            HorizontalLayout { padding-left: 12px; padding-right: 10px; padding-top: 8px; padding-bottom: 8px; spacing: 10px; alignment: center;
+                                PaneBadge { text: root.right-kind == "local" ? I18n.local : "REMOTE"; fill: root.right-kind == "local" ? Tokens.accent : Tokens.brand; }
+                                Text {
+                                    text: root.remote-path-display;
+                                    color: root.remote-loading ? Tokens.accent : Tokens.text-sec;
+                                    font-family: "JetBrains Mono"; font-size: 12px; horizontal-stretch: 1; vertical-alignment: center; horizontal-alignment: left; overflow: elide;
+                                }
+                                IconButton { icon: "arrow-left"; disabled: root.remote-loading; clicked => { root.nav-remote-back(); } }
+                                IconButton { icon: "arrow-right"; disabled: root.remote-loading; clicked => { root.nav-remote-forward(); } }
+                                IconButton { icon: "chevron-up"; disabled: root.remote-loading; clicked => { root.nav-remote-up(); } }
+                                IconButton { icon: "home"; disabled: root.remote-loading; clicked => { root.set-pane-local(1); } }
+                            }
+                        }
+                        // column headers — clickable: sort by that column (toggle asc/desc if active)
+                        Rectangle {
+                            height: 24px; background: Tokens.bg;
+                            HorizontalLayout { padding-left: 14px; padding-right: 14px; spacing: 10px; alignment: center;
+                                Rectangle { width: 20px; }
+                                SortHeader { horizontal-stretch: 1; label: "NAME"; key: "name"; active-key: root.remote-sort-key; active-dir: root.remote-sort-dir; clicked-with(k) => { root.sort-remote(k); } }
+                                SortHeader { width: 84px; label: "MODIFIED"; key: "date"; active-key: root.remote-sort-key; active-dir: root.remote-sort-dir; right-align: true; clicked-with(k) => { root.sort-remote(k); } }
+                                SortHeader { width: 52px; label: "SIZE"; key: "size"; active-key: root.remote-sort-key; active-dir: root.remote-sort-dir; right-align: true; clicked-with(k) => { root.sort-remote(k); } }
+                            }
+                            Rectangle { x: 0; y: parent.height - 1px; width: parent.width; height: 1px; background: Tokens.border; }
+                        }
+                        Rectangle {
+                            background: Tokens.bg; horizontal-stretch: 1;
+                            if root.remote-loading : Rectangle {
+                                width: parent.width; height: parent.height; background: Tokens.bg;
+                                Icon { kind: "activity"; width: 24px; height: 24px; fg: Tokens.accent; x: (parent.width - self.width) / 2; y: parent.height / 2 - 26px; }
+                                Text { text: "Loading..."; color: Tokens.text-sec; font-size: 12px; font-weight: 600; width: parent.width; height: 18px; y: parent.height / 2 + 6px; horizontal-alignment: center; vertical-alignment: center; }
+                            }
+                            if !root.remote-loading : FileScrollView {
+                                width: parent.width; height: parent.height;
+                                VerticalLayout {
+                                    spacing: 0px;
+                                    for e[i] in root.remote-entries : Rectangle {
+                                        height: 30px;
+                                        background: i == root.remote-selected
+                                            ? (root.active-pane == "remote" ? Tokens.selection : Tokens.row-hover)
+                                            : (r_touch.has-hover ? Tokens.row-hover : transparent);
+                                        r_touch := TouchArea {
+                                            mouse-cursor: pointer;
+                                            clicked => { root.remote-selected = i; root.active-pane = "remote"; root.activate-pane("remote"); root.update-selected-path(); }
+                                            double-clicked => { if (e.is-dir) { root.navigate-remote(e.name); } }
+                                            pointer-event(pe) => {
+                                                if (pe.button == PointerEventButton.right && pe.kind == PointerEventKind.down) {
+                                                    root.remote-selected = i;
+                                                    root.ctx-pane = "remote"; root.ctx-index = i; root.ctx-name = e.name; root.ctx-is-dir = e.is-dir;
+                                                    root.ctx-x = self.absolute-position.x + self.mouse-x;
+                                                    root.ctx-y = self.absolute-position.y + self.mouse-y;
+                                                    root.ctx-open = true;
+                                                } else if (pe.button == PointerEventButton.left || pe.kind == PointerEventKind.move || pe.kind == PointerEventKind.up) {
+                                                    if (pe.kind == PointerEventKind.down) {
+                                                        root.drag-source = "remote"; root.drag-index = i; root.drag-name = e.name;
+                                                        root.drag-is-dir = e.is-dir;
+                                                        root.drag-pressed = true; root.drag-active = false;
+                                                        root.drag-start-x = self.absolute-position.x + self.mouse-x;
+                                                        root.drag-start-y = self.absolute-position.y + self.mouse-y;
+                                                    } else if (pe.kind == PointerEventKind.move && root.drag-pressed) {
+                                                        root.drag-x = self.absolute-position.x + self.mouse-x;
+                                                        root.drag-y = self.absolute-position.y + self.mouse-y;
+                                                        if (!root.drag-active &&
+                                                            (abs(root.drag-x - root.drag-start-x) > 5px ||
+                                                             abs(root.drag-y - root.drag-start-y) > 5px)) {
+                                                            root.drag-active = true;
+                                                        }
+                                                        if (root.drag-active && !root.native-drag-started &&
+                                                            (root.drag-x < 0px || root.drag-x > root.width || root.drag-y < 0px || root.drag-y > root.height)) {
+                                                            root.native-drag-started = true;
+                                                            root.start-external-drag("remote", i);
+                                                        }
+                                                    } else if (pe.kind == PointerEventKind.up) {
+                                                        // dropped — complete transfer if it ended over the local pane
+                                                        if (root.drag-active) {
+                                                            if (root.drag-over-favorites) {
+                                                                root.add-local-favorite(root.drag-source, root.drag-index);
+                                                            } else if (root.drag-source == "local" && root.drag-target == "remote") {
+                                                                root.local-selected = root.drag-index; root.upload();
+                                                            } else if (root.drag-source == "remote" && root.drag-target == "local") {
+                                                                root.remote-selected = root.drag-index; root.download();
+                                                            }
+                                                        }
+                                                        root.drag-pressed = false; root.drag-active = false;
+                                                        root.native-drag-started = false;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        HorizontalLayout { padding-left: 14px; padding-right: 14px; spacing: 10px;
+                                            FileIcon { is-dir: e.is-dir; selected: i == root.remote-selected && root.active-pane == "remote"; }
+                                            Text { text: e.name; color: i == root.remote-selected && root.active-pane == "remote" ? Tokens.selection-text : Tokens.text; font-size: 13px; font-weight: i == root.remote-selected ? 600 : 400; horizontal-stretch: 1; vertical-alignment: center; overflow: elide; }
+                                            Text { text: e.date; color: i == root.remote-selected && root.active-pane == "remote" ? #FFFFFFCC : Tokens.text-sec; font-family: "JetBrains Mono"; font-size: 10px; width: 84px; vertical-alignment: center; horizontal-alignment: right; }
+                                            MetadataSizeCell {
+                                                text: e.size-text;
+                                                state: e.metadata-state;
+                                                selected: i == root.remote-selected && root.active-pane == "remote";
+                                                pulse: root.metadata-pulse;
+                                            }
+                                        }
+                                    }
+                                    if root.remote-entries.length == 0 : Text { text: " "; color: Tokens.text-ter; }
+                                }
+                            }
+                            if root.external-drop-active && root.external-drop-pane == 1 : Rectangle {
+                                width: parent.width; height: parent.height;
+                                background: Tokens.accent-soft.transparentize(0.18);
+                                border-width: 2px; border-color: Tokens.accent; border-radius: 6px;
+                                Icon { kind: "download"; width: 24px; height: 24px; fg: Tokens.accent; x: (parent.width - self.width) / 2; y: parent.height / 2 - 28px; }
+                                Text { text: "Copy here"; color: Tokens.accent-text; font-size: 13px; font-weight: 700; width: parent.width; height: 20px; y: parent.height / 2 + 6px; horizontal-alignment: center; vertical-alignment: center; }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ── status / transfer bar ──
+            Rectangle {
+                height: 40px; background: Tokens.surface;
+                border-width: 1px; border-color: Tokens.border;
+                Rectangle {
+                    x: 14px; y: 6px; height: 28px; width: 339px;
+                    background: cp_touch.has-hover ? Tokens.row-hover : Tokens.field-bg;
+                    border-radius: 6px;
+                    HorizontalLayout { padding-left: 9px; padding-right: 9px; spacing: 7px; alignment: center;
+                        VerticalLayout {
+                            width: 14px; alignment: center;
+                            Icon { kind: "copy"; width: 14px; height: 14px; fg: cp_touch.has-hover ? Tokens.text : Tokens.text-sec; }
+                        }
+                        Text {
+                            text: root.selected-path != "" ? root.selected-path : (root.active-pane == "local" ? root.local-cwd : root.remote-cwd);
+                            color: Tokens.text-sec; font-family: "JetBrains Mono"; font-size: 11px; horizontal-stretch: 1; vertical-alignment: center; horizontal-alignment: left; overflow: elide;
+                        }
+                    }
+                    cp_touch := TouchArea { mouse-cursor: pointer; clicked => { root.copy-selected-path(); } }
+                }
+                Rectangle { x: 363px; y: 11px; width: 1px; height: 18px; background: Tokens.border; }
+                if root.transfer-active : ProgressBar { x: 374px; y: 18px; width: 150px; fraction: root.transfer-fraction; }
+                if root.transfer-active : Text { x: 534px; y: 0px; width: 146px; height: parent.height; text: root.transfer-label; color: Tokens.text; font-weight: 500; font-size: 11px; vertical-alignment: center; overflow: elide; }
+                if root.transfer-active && root.transfer-total > 0 : Text {
+                    x: 690px; y: 0px; width: 122px; height: parent.height;
+                    text: root.transfer-progress-text;
+                    color: Tokens.text-sec; font-family: "JetBrains Mono"; font-size: 10px; vertical-alignment: center;
+                }
+                if root.status != "" : Text { x: 384px; y: 0px; width: 360px; height: parent.height; text: root.status; color: Tokens.success; font-size: 11px; vertical-alignment: center; overflow: elide; }
+                if root.error != "" : Text {
+                    x: root.width - 620px; y: 0px; width: 260px; height: parent.height;
+                    text: "error: " + root.error; color: Tokens.danger; font-size: 11px; vertical-alignment: center; overflow: elide;
+                }
+                Text {
+                    x: root.width - 254px; y: 0px; width: 84px; height: parent.height;
+                    text: (root.active-pane == "local" ? root.local-count : root.remote-count) + " items"; color: Tokens.text-ter; font-size: 12px; vertical-alignment: center; horizontal-alignment: right;
+                }
+                if (root.active-pane == "local" && root.left-kind == "remote") || (root.active-pane == "remote" && root.right-kind == "remote") : Rectangle {
+                    x: root.width - 139px; y: 8px; height: 24px; width: 125px; border-radius: 4px; background: Tokens.accent-soft;
+                    HorizontalLayout { padding-left: 8px; padding-right: 8px; spacing: 6px; alignment: center;
+                        Rectangle {
+                            width: 7px; height: 18px; background: transparent;
+                            VerticalLayout { alignment: center;
+                                Rectangle { width: 7px; height: 7px; border-radius: 4px; background: Tokens.success; }
+                            }
+                        }
+                        Text { text: "Connected · " + (root.active-pane == "local" ? root.left-protocol : root.right-protocol); color: Tokens.accent-text; font-size: 11px; font-weight: 600; vertical-alignment: center; overflow: elide; }
+                    }
+                }
+            }
+        }
+
+        // ── context menu (custom overlay) ──
+        if root.ctx-open : Rectangle {
+            // backdrop: click anywhere closes
+            background: transparent;
+            bg := TouchArea { mouse-cursor: pointer; clicked => { root.ctx-open = false; } }
+            // clamp so the menu stays on-screen
+            ctx_card := Rectangle {
+                x: min(root.ctx-x, root.width - 154px);
+                y: min(root.ctx-y, root.height - 104px);
+                width: 150px;
+                height: 96px;
+                background: Tokens.surface-raised;
+                border-radius: 8px;
+                border-width: 1px; border-color: Tokens.border-strong;
+                drop-shadow-blur: 24px; drop-shadow-offset-y: 6px; drop-shadow-color: #00000044;
+                // stop clicks on the card from closing
+                TouchArea { clicked => { } }
+                VerticalLayout { padding: 4px; spacing: 0px;
+                    if root.ctx-is-dir : CtxItem {
+                        text: I18n.open-cap;
+                        triggered => { root.ctx-open = false; if (root.ctx-pane == "local") { root.navigate-local(root.ctx-name); } else { root.navigate-remote(root.ctx-name); } }
+                    }
+                    if root.ctx-pane == "remote" && !root.ctx-is-dir : CtxItem {
+                        text: I18n.download;
+                        triggered => { root.ctx-open = false; root.remote-selected = root.ctx-index; root.download(); }
+                    }
+                    if root.ctx-pane == "local" && !root.ctx-is-dir : CtxItem {
+                        text: I18n.upload;
+                        triggered => { root.ctx-open = false; root.local-selected = root.ctx-index; root.upload(); }
+                    }
+                    CtxItem {
+                        text: I18n.copy-path;
+                        triggered => { root.ctx-open = false; root.copy-path(root.ctx-pane, root.ctx-name); }
+                    }
+                    CtxItem {
+                        text: I18n.del-cap;
+                        danger: true;
+                        triggered => {
+                            root.ctx-open = false;
+                            root.request-delete(root.ctx-pane, root.ctx-name, root.ctx-is-dir);
+                        }
+                    }
+                }
+            }
+        }
+
+        // ── delete-confirmation dialog (trash local / delete remote) ──
+        if root.delete-open : Rectangle {
+            background: Tokens.scrim;
+            TouchArea { clicked => { } }   // modal — force an explicit choice
+            Rectangle {
+                x: (root.width - self.width) / 2;
+                y: (root.height - self.height) / 2;
+                width: 400px; height: 289px; background: Tokens.card;
+                border-radius: 14px; border-width: 1px; border-color: Tokens.border-strong;
+                drop-shadow-blur: 60px; drop-shadow-offset-y: 24px; drop-shadow-color: #00000066;
+                TouchArea { clicked => { } }
+                VerticalLayout { padding: 24px; spacing: 16px;
+                    Rectangle {
+                        width: 44px; height: 44px; border-radius: 22px; background: Tokens.danger-soft;
+                        Icon { kind: "trash"; fg: Tokens.danger; width: 22px; height: 22px; x: 11px; y: 11px; }
+                    }
+                    Text { text: root.delete-is-dir ? "Delete folder?" : "Delete file?"; color: Tokens.text; font-size: 16px; font-weight: 700; height: 19px; vertical-alignment: center; }
+                    VerticalLayout { spacing: 8px;
+                        Text {
+                            height: 34px;
+                            text: "\"" + root.delete-name + "\" will be " + (root.delete-pane == "remote" ? "permanently deleted from the server." : "moved to the Trash. You can restore it later from Finder.");
+                            color: Tokens.text-sec; font-size: 12px; wrap: word-wrap;
+                        }
+                        Rectangle {
+                            height: 26px; width: 194px; border-radius: 4px; background: Tokens.bg;
+                            HorizontalLayout { padding-left: 9px; padding-right: 9px; spacing: 7px; alignment: center;
+                                Icon { kind: "copy"; width: 13px; height: 13px; fg: Tokens.text-ter; }
+                                Text {
+                                    text: root.delete-path != "" ? root.delete-path : root.delete-name;
+                                    color: Tokens.text-sec; font-family: "JetBrains Mono"; font-size: 10px; overflow: elide; horizontal-stretch: 1; vertical-alignment: center; horizontal-alignment: left;
+                                }
+                            }
+                        }
+                        // "Don't ask again this session" — sticky until the connection ends
+                        Rectangle {
+                            height: 22px;
+                            cb_touch := TouchArea { mouse-cursor: pointer; clicked => { root.delete-dont-ask = !root.delete-dont-ask; } }
+                            HorizontalLayout { spacing: 8px; alignment: start;
+                                Rectangle {
+                                    width: 15px; height: 15px; y: (parent.height - self.height) / 2;
+                                    border-radius: 4px; border-width: 1px;
+                                    border-color: root.delete-dont-ask ? Tokens.accent : Tokens.border-strong;
+                                    background: root.delete-dont-ask ? Tokens.accent : transparent;
+                                    if root.delete-dont-ask : Path {
+                                        x: 3px; y: 4px; width: 9px; height: 7px;
+                                        commands: "M0 3.4 L3.2 6.6 L9 0.6";
+                                        fill: transparent; stroke: #FFFFFF; stroke-width: 2px;
+                                    }
+                                }
+                                Text { text: I18n.delete-dont-ask; color: Tokens.text-sec; font-size: 12px; vertical-alignment: center; }
+                            }
+                        }
+                    }
+                    Rectangle { height: 0px; vertical-stretch: 1; }
+                    HorizontalLayout { spacing: 10px; alignment: end;
+                        Rectangle {
+                            width: 68px; height: 32px; border-radius: 6px;
+                            background: del_cancel.has-hover ? Tokens.row-hover : Tokens.bg;
+                            border-width: 1px; border-color: Tokens.border-strong;
+                            Text { text: I18n.cancel-cap; color: Tokens.text; font-size: 12px; font-weight: 500; horizontal-alignment: center; vertical-alignment: center; }
+                            del_cancel := TouchArea { mouse-cursor: pointer; clicked => { root.delete-open = false; } }
+                        }
+                        Rectangle {
+                            width: 91px; height: 32px; border-radius: 6px;
+                            background: del_ok.has-hover ? Tokens.danger-fill-hover : Tokens.danger-fill;
+                            Icon { kind: "trash"; width: 15px; height: 15px; fg: #FFFFFF; x: 16px; y: 8px; }
+                            Text { text: I18n.del-cap; color: #FFFFFF; font-size: 12px; font-weight: 600; x: 37px; y: 0px; width: 44px; height: 32px; vertical-alignment: center; horizontal-alignment: left; }
+                            del_ok := TouchArea { mouse-cursor: pointer; clicked => { root.confirm-delete(); } }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ── sort popover (Name / Size / Date + Ascending/Descending) ──
+        if root.sort-open && !root.manager-open && !root.editor-open && !root.palette-open : Rectangle {
+            background: transparent;
+            TouchArea { clicked => { root.sort-open = false; } }
+            Rectangle {
+                x: root.sort-pane == "local" ? 258px : 700px;
+                y: 96px; width: 184px; height: 165px;
+                background: Tokens.card; border-radius: 10px; border-width: 1px; border-color: Tokens.border-strong;
+                drop-shadow-blur: 28px; drop-shadow-offset-y: 10px; drop-shadow-color: #00000033;
+                TouchArea { clicked => { } }
+                VerticalLayout { padding: 6px; spacing: 2px;
+                    Rectangle { height: 22px; HorizontalLayout { padding-left: 8px; alignment: start; Text { text: "SORT BY"; color: Tokens.text-sec; font-size: 9px; font-weight: 700; letter-spacing: 1.2px; vertical-alignment: center; } } }
+                    SortOpt { label: "Name"; active: (root.sort-pane == "local" ? root.local-sort-key : root.remote-sort-key) == "name"; triggered => { root.apply-sort-field("name"); root.sort-open = false; } }
+                    SortOpt { label: "Size"; active: (root.sort-pane == "local" ? root.local-sort-key : root.remote-sort-key) == "size"; triggered => { root.apply-sort-field("size"); root.sort-open = false; } }
+                    SortOpt { label: "Date"; active: (root.sort-pane == "local" ? root.local-sort-key : root.remote-sort-key) == "date"; triggered => { root.apply-sort-field("date"); root.sort-open = false; } }
+                    Rectangle { height: 1px; background: Tokens.border; }
+                    SortDirOpt {
+                        asc: (root.sort-pane == "local" ? root.local-sort-dir : root.remote-sort-dir) == "asc";
+                        label: (root.sort-pane == "local" ? root.local-sort-dir : root.remote-sort-dir) == "asc" ? "Ascending" : "Descending";
+                        triggered => { root.toggle-sort-dir(); }
+                    }
+                }
+            }
+        }
+
+        // ── overwrite conflict dialog (Overwrite / Cancel / Save as new) — centered via absolute x/y ──
+        if root.overwrite-open : Rectangle {
+            background: Tokens.scrim;
+            TouchArea { clicked => { } } // modal — force a choice (no backdrop close)
+            Rectangle {
+                x: (root.width - self.width) / 2;
+                y: (root.height - self.height) / 2;
+                width: 420px; height: 210px; background: Tokens.surface-raised;
+                border-radius: 14px; border-width: 1px; border-color: Tokens.border-strong;
+                drop-shadow-blur: 60px; drop-shadow-offset-y: 24px; drop-shadow-color: #00000066;
+                TouchArea { clicked => { } }
+                VerticalLayout { padding: 22px; spacing: 14px;
+                    Text { text: I18n.overwrite-title; color: Tokens.text; font-size: 15px; font-weight: 700; }
+                    Text { text: root.overwrite-name; color: Tokens.accent; font-size: 14px; font-weight: 700; overflow: elide; }
+                    Text { text: I18n.overwrite-msg; color: Tokens.text-sec; font-size: 12px; wrap: word-wrap; }
+                    Rectangle { vertical-stretch: 1; }
+                    HorizontalLayout { spacing: 10px; alignment: end;
+                        GhostButton { text: I18n.cancel-cap; clicked => { root.resolve-overwrite(0); } }
+                        GhostButton { text: I18n.save-new-cap; clicked => { root.resolve-overwrite(2); } }
+                        PrimaryButton { text: I18n.overwrite-cap; clicked => { root.resolve-overwrite(1); } }
+                    }
+                }
+            }
+        }
+
+        // ── drag badge (follows the cursor while dragging a file across panes) ──
+        if root.drag-active : Rectangle {
+            x: root.drag-x + 14px; y: root.drag-y + 4px;
+            height: 26px; width: 220px;
+            background: root.favorite-remove-target ? Tokens.danger : (root.drag-source == "local" || root.favorite-dragging || root.saved-dragging ? Tokens.accent : Tokens.brand);
+            border-radius: 6px;
+            border-width: 1px; border-color: #FFFFFF66;
+            drop-shadow-blur: 14px; drop-shadow-offset-y: 3px; drop-shadow-color: #00000066;
+            HorizontalLayout { padding-left: 10px; padding-right: 10px; alignment: start;
+                Text {
+                    text: root.favorite-remove-target ? "remove from Favorites  " + root.drag-name : (root.saved-dragging ? "move server  " + root.drag-name : (root.favorite-dragging ? "move favorite  " + root.drag-name : (root.drag-over-favorites ? "+ favorite  " + root.drag-name : ((root.drag-source == "local" ? "upload >  " : "< download  ") + root.drag-name))));
+                    color: #FFFFFF; font-size: 11px; font-weight: 600; vertical-alignment: center; overflow: elide;
+                }
+            }
+        }
+
+        // ── transfer panel ──
+        if root.transfer-panel-open : Rectangle {
+            background: Tokens.scrim;
+            TouchArea { clicked => { root.transfer-panel-open = false; } }
+            panel := Rectangle {
+                x: (root.width - self.width) / 2;
+                y: 36px;
+                width: 640px;
+                height: 610px;
+                background: Tokens.card;
+                border-radius: 14px;
+                border-width: 1px; border-color: Tokens.border-strong;
+                drop-shadow-blur: 60px; drop-shadow-offset-y: 24px; drop-shadow-color: #00000066;
+                clip: true;
+                TouchArea { clicked => { } }
+                VerticalLayout { padding: 0px; spacing: 0px;
+                    Rectangle {
+                        height: 60px; background: transparent;
+                        Rectangle {
+                            x: 18px; y: 15px; width: 30px; height: 30px; border-radius: 6px; background: Tokens.accent-soft;
+                            Icon { kind: "transfer"; fg: Tokens.accent; width: 17px; height: 17px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; }
+                        }
+                        Text { x: 58px; y: 0px; width: 82px; height: parent.height; text: "Transfers"; color: Tokens.text; font-size: 15px; font-weight: 700; vertical-alignment: center; horizontal-alignment: left; }
+                        if root.transfer-jobs.length > 0 : Rectangle {
+                            x: 139px; y: 20px; width: 21px; height: 20px; border-radius: 10px; background: Tokens.accent;
+                            Text { text: root.transfer-jobs.length; color: #FFFFFF; font-size: 10px; font-weight: 700; horizontal-alignment: center; vertical-alignment: center; }
+                        }
+                        Rectangle {
+                            x: 414px; y: 17px; width: 34px; height: 26px; border-radius: 4px; background: Tokens.bg;
+                            Text { text: "All"; color: Tokens.text; font-size: 11px; font-weight: 600; vertical-alignment: center; horizontal-alignment: center; }
+                        }
+                        Rectangle {
+                            x: 458px; y: 17px; width: 54px; height: 26px; border-radius: 4px; background: transparent;
+                            border-width: 1px; border-color: Tokens.border;
+                            Text { text: "Active"; color: Tokens.text-sec; font-size: 11px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
+                        }
+                        Icon { kind: "trash"; fg: Tokens.text-sec; width: 13px; height: 13px; x: 522px; y: 23px; }
+                        Text { x: 540px; y: 0px; width: 44px; height: parent.height; text: "Clear"; color: Tokens.text-sec; font-size: 11px; font-weight: 500; vertical-alignment: center; horizontal-alignment: left; }
+                        TouchArea { x: 522px; y: 17px; width: 62px; height: 26px; mouse-cursor: pointer; clicked => { root.clear-finished-transfers(); } }
+                        IconButton { icon: "x"; x: 594px; y: 15px; clicked => { root.transfer-panel-open = false; } }
+                        Rectangle { y: parent.height - 1px; width: parent.width; height: 1px; background: Tokens.border; }
+                    }
+                    ScrollView { vertical-stretch: 1; VerticalLayout { padding-left: 10px; padding-right: 10px; padding-top: 8px; padding-bottom: 8px; spacing: 8px;
+                        if root.transfer-jobs.length == 0 : Rectangle {
+                            height: 474px;
+                            Text { text: "No transfers yet.\nDrag between panes or use the center arrows."; color: Tokens.text-ter; font-size: 13px; horizontal-alignment: center; vertical-alignment: center; wrap: word-wrap; }
+                        }
+                        for j in root.transfer-jobs : Rectangle {
+                            width: 620px; height: 90px; border-radius: 8px; background: Tokens.bg;
+                            border-width: 1px; border-color: Tokens.border;
+                            Rectangle {
+                                x: 12px; y: 11px; width: 596px; height: 32px; background: transparent;
+                                Rectangle {
+                                    x: 0px; y: 0px; width: 32px; height: 32px; border-radius: 8px;
+                                    background: j.direction == "download" ? Tokens.accent-soft : Tokens.brand-soft;
+                                    Icon { kind: j.direction == "download" ? "arrow-down-line" : "arrow-up-line"; width: 16px; height: 16px; fg: j.direction == "download" ? Tokens.accent : Tokens.brand; x: 8px; y: 8px; }
+                                }
+                                Rectangle {
+                                    x: 43px; y: 0px; width: 465px; height: 34px; background: transparent;
+                                    Text { x: 0px; y: 0px; width: 465px; height: 18px; text: j.name; color: Tokens.text; font-size: 13px; font-weight: 600; overflow: elide; vertical-alignment: center; horizontal-alignment: left; }
+                                    Text { x: 0px; y: 18px; width: 465px; height: 16px; text: j.route; color: Tokens.text-sec; font-family: "JetBrains Mono"; font-size: 10px; overflow: elide; vertical-alignment: center; horizontal-alignment: left; }
+                                }
+                                Rectangle {
+                                    x: 519px; y: 9px; width: 50px; height: 14px; background: transparent;
+                                    Rectangle { x: 0px; y: 4px; width: 6px; height: 6px; border-radius: 3px; background: j.state == "done" ? Tokens.success : (j.state == "failed" ? Tokens.danger : (j.state == "active" ? Tokens.accent : Tokens.text-ter)); }
+                                    Text {
+                                        x: 11px; y: 0px; height: 14px; width: 39px;
+                                        text: j.state == "active" ? "Active" : (j.state == "done" ? "Done" : (j.state == "failed" ? "Failed" : "Queued"));
+                                        color: j.state == "done" ? Tokens.success-text : (j.state == "failed" ? Tokens.danger-text : (j.state == "active" ? Tokens.accent-text : Tokens.text-sec));
+                                        font-size: 10px; font-weight: 600; vertical-alignment: center; horizontal-alignment: left; overflow: elide;
+                                    }
+                                }
+                                Rectangle {
+                                    x: 572px; y: 4px; width: 24px; height: 24px; border-radius: 4px; background: close_touch.has-hover ? Tokens.row-hover : transparent;
+                                    Icon { kind: j.state == "done" ? "check" : "x"; width: 15px; height: 15px; fg: Tokens.text-ter; x: 4.5px; y: 4.5px; }
+                                    close_touch := TouchArea { mouse-cursor: pointer; clicked => { root.dismiss-transfer(j.id); } }
+                                }
+                            }
+                            Rectangle {
+                                x: 12px; y: 52px; width: 596px; height: 5px; border-radius: 3px; background: Tokens.border;
+                                Rectangle {
+                                    x: 0px; y: 0px; height: 5px; width: parent.width * clamp(j.fraction, 0, 1);
+                                    border-radius: 3px; background: j.state == "failed" ? Tokens.danger : (j.state == "done" ? Tokens.success : Tokens.accent);
+                                }
+                            }
+                            Rectangle {
+                                x: 12px; y: 66px; width: 596px; height: 13px; background: transparent;
+                                Text { x: 0px; y: -1px; width: 472px; height: 15px; text: j.progress-text != "" ? j.progress-text : Fmt.human-size(j.done) + " / " + Fmt.human-size(j.total); color: Tokens.text-sec; font-family: "JetBrains Mono"; font-size: 10px; font-weight: 400; vertical-alignment: center; horizontal-alignment: left; }
+                                Text { x: 482px; y: -1px; width: 114px; height: 15px; text: j.message; color: j.state == "failed" ? Tokens.danger-text : Tokens.text-sec; font-family: "JetBrains Mono"; font-size: 10px; font-weight: 400; vertical-alignment: center; horizontal-alignment: right; overflow: elide; }
+                            }
+                        }
+                    } }
+                    Rectangle {
+                        height: 52px; background: transparent;
+                        border-width: 1px; border-color: Tokens.border;
+                        Icon { kind: "activity"; fg: Tokens.text-ter; x: 18px; y: 18px; }
+                        Text {
+                            x: 44px; y: 0px; width: 320px; height: parent.height;
+                            text: root.transfer-summary;
+                            color: Tokens.text-sec; font-size: 11px; vertical-alignment: center; horizontal-alignment: left;
+                        }
+                        Rectangle {
+                            x: 533px; y: 12px; width: 89px; height: 28px; border-radius: 6px;
+                            background: pta.has-hover ? Tokens.row-hover : Tokens.surface-raised;
+                            border-width: 1px; border-color: Tokens.border;
+                            Icon { kind: root.transfers-paused ? "arrow-down-line" : "pause"; fg: root.transfers-paused ? Tokens.accent : Tokens.text-sec; width: 14px; height: 14px; x: 11px; y: 7px; }
+                            Text { text: root.transfers-paused ? "Resume all" : "Pause all"; color: Tokens.text; font-size: 11px; font-weight: 500; x: 31px; y: 0px; width: 58px; height: parent.height; vertical-alignment: center; horizontal-alignment: left; }
+                            pta := TouchArea { mouse-cursor: pointer; clicked => { root.transfers-paused = !root.transfers-paused; root.set-transfers-paused(root.transfers-paused); } }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ── command palette ──
+        if root.palette-open : Rectangle {
+            background: Tokens.scrim;
+            TouchArea { clicked => { root.palette-open = false; } }
+            Rectangle {
+                x: (root.width - self.width) / 2;
+                y: 165px;
+                width: 580px; height: 400px;
+                    background: Tokens.card; border-radius: 14px; border-width: 1px; border-color: Tokens.border-strong;
+                    drop-shadow-blur: 60px; drop-shadow-offset-y: 24px; drop-shadow-color: #00000066;
+                    clip: true;
+                    TouchArea { clicked => { } }
+                    VerticalLayout { padding: 0px; spacing: 0px;
+                        Rectangle {
+                            height: 52px; background: transparent;
+                            Icon { kind: "search"; width: 18px; height: 18px; fg: Tokens.text-ter; x: 18px; y: 17px; }
+                            TextInput {
+                                x: 48px; y: 0px; width: 473px; height: 52px;
+                                text <=> root.palette-query;
+                                color: Tokens.text; font-size: 15px; single-line: true;
+                                horizontal-alignment: left;
+                                vertical-alignment: center;
+                                selection-background-color: Tokens.accent;
+                                selection-foreground-color: #FFFFFF;
+                                edited => { root.filter-palette(root.palette-query); }
+                            }
+                            Rectangle {
+                                x: 533px; y: 16px; width: 29px; height: 20px; border-radius: 4px; background: Tokens.surface; border-width: 1px; border-color: Tokens.border;
+                                Text { text: "⌘K"; color: Tokens.text-sec; font-size: 10px; font-weight: 600; width: parent.width; height: parent.height; horizontal-alignment: center; vertical-alignment: center; }
+                            }
+                            Rectangle { y: parent.height - 1px; width: parent.width; height: 1px; background: Tokens.border; }
+                        }
+                        ScrollView { height: 308px; VerticalLayout { padding: 6px; spacing: 2px;
+                            Rectangle {
+                                height: 28px;
+                                Text { x: 12px; y: 0px; height: parent.height; text: "CONNECT"; color: Tokens.text-ter; font-size: 10px; font-weight: 800; vertical-alignment: center; }
+                            }
+                            for c[i] in root.palette-connections : Rectangle {
+                                height: 50px; border-radius: 6px;
+                                background: i == 0 || p_touch.has-hover ? Tokens.accent-soft : transparent;
+                                p_touch := TouchArea { mouse-cursor: pointer; clicked => { root.connect-to(c.id); root.palette-open = false; } }
+                                Rectangle {
+                                    x: 10px; y: 7px; width: 36px; height: 36px; border-radius: 8px;
+                                    background: i == 0 || p_touch.has-hover ? Tokens.accent : Tokens.surface;
+                                    border-width: i == 0 || p_touch.has-hover ? 0px : 1px; border-color: Tokens.border;
+                                    Icon { kind: "server"; fg: i == 0 || p_touch.has-hover ? #FFFFFF : Tokens.text-sec; width: 17px; height: 17px; x: 9.5px; y: 9.5px; }
+                                }
+                                Text { x: 58px; y: 6px; width: 330px; height: 19px; text: c.label; color: Tokens.text; font-size: 13px; font-weight: 700; overflow: elide; vertical-alignment: center; }
+                                Text { x: 58px; y: 27px; width: 360px; height: 18px; text: c.sub + " · " + c.protocol; color: Tokens.text-sec; font-family: "JetBrains Mono"; font-size: 10px; overflow: elide; vertical-alignment: center; }
+                                Rectangle {
+                                    x: 458px; y: 16px; width: 42px; height: 18px; border-radius: 4px; background: Tokens.accent-soft;
+                                    Text { text: c.protocol; color: Tokens.accent; font-size: 9px; font-weight: 800; width: parent.width; height: parent.height; horizontal-alignment: center; vertical-alignment: center; }
+                                }
+                                Icon { kind: "enter"; fg: i == 0 || p_touch.has-hover ? Tokens.accent : Tokens.text-sec; width: 14px; height: 14px; x: 518px; y: 18px; }
+                            }
+                            Rectangle {
+                                height: 30px;
+                                Text { x: 12px; y: 0px; height: parent.height; text: "ACTIONS"; color: Tokens.text-ter; font-size: 10px; font-weight: 800; vertical-alignment: center; }
+                            }
+                            Rectangle {
+                                height: 42px; border-radius: 6px;
+                                TouchArea { mouse-cursor: pointer; clicked => { root.palette-open = false; root.new-connection(); } }
+                                Rectangle {
+                                    x: 10px; y: 5px; width: 32px; height: 32px; border-radius: 6px; background: Tokens.surface; border-width: 1px; border-color: Tokens.border;
+                                    Icon { kind: "plus"; fg: Tokens.text-sec; width: 16px; height: 16px; x: 8px; y: 8px; }
+                                }
+                                Text { x: 54px; y: 0px; width: 390px; height: parent.height; text: "New connection"; color: Tokens.text; font-size: 13px; font-weight: 500; vertical-alignment: center; }
+                                Rectangle {
+                                    x: 522px; y: 11px; width: 30px; height: 20px; border-radius: 4px; background: Tokens.surface; border-width: 1px; border-color: Tokens.border;
+                                    Text { text: "⌘N"; color: Tokens.text-sec; font-size: 10px; font-weight: 600; width: parent.width; height: parent.height; horizontal-alignment: center; vertical-alignment: center; }
+                                }
+                            }
+                            Rectangle {
+                                height: 42px; border-radius: 6px;
+                                TouchArea { mouse-cursor: pointer; clicked => { root.import-forklift(); } }
+                                Rectangle {
+                                    x: 10px; y: 5px; width: 32px; height: 32px; border-radius: 6px; background: Tokens.surface; border-width: 1px; border-color: Tokens.border;
+                                    Icon { kind: "download"; fg: Tokens.text-sec; width: 16px; height: 16px; x: 8px; y: 8px; }
+                                }
+                                Text { x: 54px; y: 0px; width: 390px; height: parent.height; text: I18n.import-cap; color: Tokens.text; font-size: 13px; font-weight: 500; vertical-alignment: center; }
+                            }
+                            Rectangle {
+                                height: 42px; border-radius: 6px;
+                                TouchArea { mouse-cursor: pointer; clicked => { root.toggle-theme(); } }
+                                Rectangle {
+                                    x: 10px; y: 5px; width: 32px; height: 32px; border-radius: 6px; background: Tokens.surface; border-width: 1px; border-color: Tokens.border;
+                                    Icon { kind: "theme"; fg: Tokens.text-sec; width: 16px; height: 16px; x: 8px; y: 8px; }
+                                }
+                                Text { x: 54px; y: 0px; width: 390px; height: parent.height; text: "Toggle theme"; color: Tokens.text; font-size: 13px; font-weight: 500; vertical-alignment: center; }
+                                Rectangle {
+                                    x: 522px; y: 11px; width: 30px; height: 20px; border-radius: 4px; background: Tokens.surface; border-width: 1px; border-color: Tokens.border;
+                                    Text { text: "⌘T"; color: Tokens.text-sec; font-size: 10px; font-weight: 600; width: parent.width; height: parent.height; horizontal-alignment: center; vertical-alignment: center; }
+                                }
+                            }
+                        } }
+                        Rectangle {
+                            height: 40px; background: transparent; border-width: 1px; border-color: Tokens.border;
+                            Rectangle { x: 16px; y: 10px; width: 18px; height: 20px; border-radius: 4px; background: Tokens.surface-raised; border-width: 1px; border-color: Tokens.border; Text { text: "↑"; color: Tokens.text-sec; font-size: 10px; font-weight: 600; width: parent.width; height: parent.height; horizontal-alignment: center; vertical-alignment: center; } }
+                            Rectangle { x: 34px; y: 10px; width: 18px; height: 20px; border-radius: 4px; background: Tokens.surface-raised; border-width: 1px; border-color: Tokens.border; Text { text: "↓"; color: Tokens.text-sec; font-size: 10px; font-weight: 600; width: parent.width; height: parent.height; horizontal-alignment: center; vertical-alignment: center; } }
+                            Text { x: 58px; y: 0px; height: parent.height; text: "Navigate"; color: Tokens.text-ter; font-size: 11px; vertical-alignment: center; }
+                            Rectangle { x: 132px; y: 10px; width: 22px; height: 20px; border-radius: 4px; background: Tokens.surface-raised; border-width: 1px; border-color: Tokens.border; Text { text: "↵"; color: Tokens.text-sec; font-size: 10px; font-weight: 600; width: parent.width; height: parent.height; horizontal-alignment: center; vertical-alignment: center; } }
+                            Text { x: 160px; y: 0px; height: parent.height; text: "Select"; color: Tokens.text-ter; font-size: 11px; vertical-alignment: center; }
+                            Rectangle { x: 210px; y: 10px; width: 28px; height: 20px; border-radius: 4px; background: Tokens.surface-raised; border-width: 1px; border-color: Tokens.border; Text { text: "esc"; color: Tokens.text-sec; font-size: 10px; font-weight: 600; width: parent.width; height: parent.height; horizontal-alignment: center; vertical-alignment: center; } }
+                            Text { x: 244px; y: 0px; height: parent.height; text: "Close"; color: Tokens.text-ter; font-size: 11px; vertical-alignment: center; }
+                            BrandWordmark { x: 526px; y: 4px; height: 20px; wordmark-size: 11px; wordmark-width: 54px; }
+                        }
+                    }
+                }
+        }
+
+        // ── connection manager ──
+        if root.manager-open : Rectangle {
+            background: Tokens.scrim;
+            TouchArea { clicked => { root.manager-open = false; } }
+            Rectangle {
+                x: (root.width - self.width) / 2;
+                y: 36px;
+                width: 720px; height: 470px; background: Tokens.card;
+                    border-radius: 14px; border-width: 1px; border-color: Tokens.border-strong;
+                    drop-shadow-blur: 60px; drop-shadow-offset-y: 24px; drop-shadow-color: #00000066;
+                    clip: true;
+                    TouchArea { clicked => { } }
+                    VerticalLayout { padding: 0px; spacing: 0px;
+                        // header bar — distinct surface + a hairline separator so it doesn't blend into the list
+                        Rectangle {
+                            height: 56px; background: Tokens.surface;
+                            Rectangle {
+                                x: 18px; y: 13px; width: 30px; height: 30px; border-radius: 6px; background: Tokens.accent-soft;
+                                Icon { kind: "server"; fg: Tokens.accent; width: 17px; height: 17px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; }
+                            }
+                            Text { x: 58px; y: 0px; width: 120px; height: parent.height; text: "Connections"; color: Tokens.text; font-size: 15px; font-weight: 700; vertical-alignment: center; horizontal-alignment: left; }
+                            LabeledToolButton { x: 497px; y: 13px; width: 72px; icon: "plus"; icon-y-offset: 1px; text: I18n.new-cap; emphasized: true; clicked => { root.new-connection(); } }
+                            Rectangle {
+                                x: 579px; y: 13px; width: 83px; height: 30px; border-radius: 6px;
+                                background: im_touch.has-hover ? Tokens.row-hover : Tokens.surface-raised;
+                                border-width: 1px; border-color: Tokens.border;
+                                HorizontalLayout { padding-left: 12px; padding-right: 12px; spacing: 6px; alignment: center;
+                                    Rectangle {
+                                        width: 15px; height: 17px; background: transparent;
+                                        Icon { kind: "download"; width: 15px; height: 15px; x: 0px; y: 7px; fg: Tokens.text-sec; }
+                                    }
+                                    Text { text: "Import"; color: Tokens.text; font-size: 12px; font-weight: 500; vertical-alignment: center; }
+                                }
+                                im_touch := TouchArea { mouse-cursor: pointer; clicked => { root.import-forklift(); } }
+                            }
+                            IconButton { icon: "x"; x: 672px; y: 13px; clicked => { root.manager-open = false; } }
+                            Rectangle { y: parent.height - 1px; width: parent.width; height: 1px; background: Tokens.border; }
+                        }
+                        Text { text: root.manager-message; color: Tokens.accent; font-size: 11px; visible: root.manager-message != ""; }
+                        ScrollView {
+                            VerticalLayout {
+                                padding-left: 12px; padding-right: 12px; padding-top: 12px; padding-bottom: 20px; spacing: 4px;
+                                for c[i] in root.connections : Rectangle {
+                                    width: 696px; height: 52px; border-radius: 8px;
+                                    background: mrow.has-hover ? Tokens.row-hover : transparent;
+                                    mrow := TouchArea { }
+                                    ProtocolBadge { x: 10px; y: 15px; protocol: c.protocol; }
+                                    Text { x: 68px; y: 10px; width: 362px; height: 16px; text: c.label; color: Tokens.text; font-size: 13px; font-weight: 600; vertical-alignment: center; horizontal-alignment: left; overflow: elide; }
+                                    Text { x: 68px; y: 28px; width: 362px; height: 14px; text: c.sub; color: Tokens.text-sec; font-family: "JetBrains Mono"; font-size: 10px; vertical-alignment: center; horizontal-alignment: left; overflow: elide; }
+                                    ManagerActionButton { x: 442px; y: 12px; width: 88px; icon: "plug-zap"; text: I18n.connect; emphasized: true; clicked => { root.connect-to(c.id); root.manager-open = false; } }
+                                    ManagerActionButton { x: 542px; y: 12px; width: 59px; icon: "edit"; text: I18n.edit-cap; text-color: Tokens.text-sec; accent-color: Tokens.text-sec; clicked => { root.edit-connection(c.id); } }
+                                    ManagerActionButton { x: 613px; y: 12px; width: 73px; icon: "trash"; text: I18n.del-cap; text-color: Tokens.danger; accent-color: Tokens.danger; clicked => { root.delete-connection(c.id); } }
+                                }
+                            }
+                        }
+                    }
+                }
+        }
+
+        // ── connection editor ──
+        if root.editor-open : Rectangle {
+            background: Tokens.scrim;
+            TouchArea { clicked => { } }
+            Rectangle {
+                x: (root.width - self.width) / 2;
+                y: (root.height - self.height) / 2;
+                width: 480px; height: 520px; background: Tokens.card;
+                    border-radius: 14px; border-width: 1px; border-color: Tokens.border-strong;
+                    drop-shadow-blur: 60px; drop-shadow-offset-y: 24px; drop-shadow-color: #00000066;
+                    clip: true;
+                    TouchArea { clicked => { } }
+                    VerticalLayout { padding: 0px; spacing: 0px;
+                        Rectangle {
+                            height: 52px; background: transparent;
+                            Rectangle {
+                                x: 20px; y: 11px; width: 30px; height: 30px; border-radius: 6px; background: Tokens.accent-soft;
+                                Icon { kind: "plug-zap"; fg: Tokens.accent; width: 16px; height: 16px; x: 7px; y: 7px; }
+                            }
+                            Text { x: 60px; y: 0px; width: 260px; height: 52px; text: root.editor-id < 0 ? I18n.new-conn : I18n.edit-conn; color: Tokens.text; font-size: 15px; font-weight: 700; vertical-alignment: center; horizontal-alignment: left; }
+                            IconButton { icon: "x"; x: 430px; y: 11px; clicked => { root.editor-open = false; } }
+                            Rectangle { y: parent.height - 1px; width: parent.width; height: 1px; background: Tokens.border; }
+                        }
+                        VerticalLayout { padding-left: 20px; padding-right: 20px; padding-top: 18px; padding-bottom: 18px; spacing: 14px; vertical-stretch: 1;
+                            VerticalLayout { spacing: 6px;
+                                Text { text: "NAME"; color: Tokens.text-ter; font-size: 9px; font-weight: 700; letter-spacing: 1px; }
+                                Field { text <=> root.editor-name; placeholder: "my server"; }
+                            }
+                            HorizontalLayout { spacing: 14px;
+                                VerticalLayout { spacing: 6px; horizontal-stretch: 1;
+                                    Text { text: "PROTOCOL"; color: Tokens.text-ter; font-size: 9px; font-weight: 700; letter-spacing: 1px; }
+                                    Rectangle {
+                                        height: 34px; border-radius: 7px;
+                                        background: Tokens.field-bg;
+                                        border-width: 1px; border-color: Tokens.border-strong;
+                                        HorizontalLayout { padding: 3px; spacing: 3px;
+                                            Rectangle {
+                                                horizontal-stretch: 1; border-radius: 5px;
+                                                background: root.editor-protocol == "sftp" ? transparent : Tokens.primary-fill;
+                                                Text { text: "FTP"; color: root.editor-protocol == "sftp" ? Tokens.text-sec : #FFFFFF; font-size: 13px; font-weight: 800; horizontal-alignment: center; vertical-alignment: center; }
+                                                TouchArea { mouse-cursor: pointer; clicked => { root.editor-protocol = "ftp"; } }
+                                            }
+                                            Rectangle {
+                                                horizontal-stretch: 1; border-radius: 5px;
+                                                background: root.editor-protocol == "sftp" ? Tokens.primary-fill : transparent;
+                                                Text { text: "SFTP"; color: root.editor-protocol == "sftp" ? #FFFFFF : Tokens.text-sec; font-size: 13px; font-weight: 800; horizontal-alignment: center; vertical-alignment: center; }
+                                                TouchArea { mouse-cursor: pointer; clicked => { root.editor-protocol = "sftp"; } }
+                                            }
+                                        }
+                                    }
+                                }
+                                VerticalLayout { spacing: 6px; width: 214px;
+                                    Text { text: "PORT"; color: Tokens.text-ter; font-size: 9px; font-weight: 700; letter-spacing: 1px; }
+                                    Field { text <=> root.editor-port; placeholder: "21"; }
+                                }
+                            }
+                            VerticalLayout { spacing: 6px;
+                                Text { text: "HOST"; color: Tokens.text-ter; font-size: 9px; font-weight: 700; letter-spacing: 1px; }
+                                Field { text <=> root.editor-host; placeholder: "ftp.example.com"; }
+                            }
+                            VerticalLayout { spacing: 6px;
+                                Text { text: "USER"; color: Tokens.text-ter; font-size: 9px; font-weight: 700; letter-spacing: 1px; }
+                                Field { text <=> root.editor-user; placeholder: "username"; }
+                            }
+                            VerticalLayout { spacing: 6px;
+                                Text { text: "PASSWORD"; color: Tokens.text-ter; font-size: 9px; font-weight: 700; letter-spacing: 1px; }
+                                Rectangle {
+                                    height: 34px;
+                                    Field { width: parent.width; text <=> root.editor-password; placeholder: "password"; input-type: password; }
+                                    Icon { kind: "eye"; fg: Tokens.text-ter; x: parent.width - 28px; y: (parent.height - self.height) / 2; }
+                                }
+                            }
+                            Rectangle {
+                                height: 33px;
+                                Text { x: 0px; y: 2px; width: 392px; height: 15px; text: "Accept any certificate"; color: Tokens.text; font-size: 12px; font-weight: 600; vertical-alignment: center; horizontal-alignment: left; }
+                                Text { x: 0px; y: 19px; width: 392px; height: 12px; text: "Skip strict TLS verification"; color: Tokens.text-sec; font-size: 10px; vertical-alignment: center; horizontal-alignment: left; }
+                                Rectangle {
+                                    x: 402px; y: 5px; width: 38px; height: 22px; border-radius: 11px;
+                                    background: root.accept-any-cert ? Tokens.accent : Tokens.border-strong;
+                                    Rectangle {
+                                        width: 16px; height: 16px; border-radius: 8px;
+                                        x: root.accept-any-cert ? 19px : 3px; y: 3px; background: #FFFFFF;
+                                    }
+                                    TouchArea { mouse-cursor: pointer; clicked => { root.toggle-tls(); } }
+                                }
+                            }
+                        }
+                        Rectangle {
+                            height: 60px; background: transparent; border-width: 1px; border-color: Tokens.border;
+                            Rectangle {
+                                x: 300px; y: 14px; width: 68px; height: 32px; border-radius: 6px;
+                                background: cancel_touch.has-hover ? Tokens.row-hover : Tokens.bg;
+                                border-width: 1px; border-color: Tokens.border-strong;
+                                Text { text: I18n.cancel-cap; color: Tokens.text; font-size: 12px; font-weight: 500; horizontal-alignment: center; vertical-alignment: center; }
+                                cancel_touch := TouchArea { mouse-cursor: pointer; clicked => { root.editor-open = false; } }
+                            }
+                            Rectangle {
+                                x: 378px; y: 14px; width: 82px; height: 32px; border-radius: 6px;
+                                background: save_touch.has-hover ? Tokens.primary-fill-hover : Tokens.primary-fill;
+                                Icon { kind: "check"; width: 15px; height: 15px; fg: #FFFFFF; x: 16px; y: 8px; }
+                                Text { text: I18n.save-cap; color: #FFFFFF; font-size: 12px; font-weight: 600; x: 37px; y: 0px; width: 35px; height: 32px; vertical-alignment: center; horizontal-alignment: left; }
+                                save_touch := TouchArea { mouse-cursor: pointer; clicked => { root.save-connection(); } }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

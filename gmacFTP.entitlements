@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- gmacFTP entitlements; see scripts/build-app.sh. -->
+<plist version="1.0">
+<dict>
+  <!-- Hardened Runtime baseline (required for notarization). Explicitly DO NOT weaken these. -->
+  <key>com.apple.security.cs.allow-jit</key>
+  <false/>
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <false/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <false/>
+
+  <!-- Network client: outbound FTP / FTPS / SFTP. -->
+  <key>com.apple.security.network.client</key>
+  <true/>
+
+  <!--
+    iCloud Keychain sync of the vault master key:
+    NO entitlement required. `kSecAttrSynchronizable` is a Security-framework attribute set at
+    runtime via the in-app "Sync via iCloud" toggle (Settings.sync_via_icloud). Works on
+    Developer-ID + notarized builds without any provisioning change.
+  -->
+
+  <!--
+    ── Phase 2 (NOT active by default): sync the connection LIST + encrypted vault across Macs.
+    Uncomment AFTER you provision an iCloud container on your App ID:
+      Apple Developer → Certificates, Identifiers & Profiles → your App ID
+        → Capabilities → iCloud → check "iCloud Documents" / "Key-Value Storage"
+        → register container iCloud.<your-bundle-id>
+    Then rebuild with a provisioning profile that includes these entitlements.
+    Provisioning details: Apple Developer portal → your App ID → iCloud capability.
+  -->
+  <!--
+  <key>com.apple.developer.icloud-services</key>
+  <array>
+    <string>CloudKit</string>
+  </array>
+  <key>com.apple.developer.ubiquity-kvstore-identifier</key>
+  <string>$(TeamIdentifierPrefix)$(CFBundleIdentifier)</string>
+  <key>com.apple.developer.icloud-container-identifiers</key>
+  <array>
+    <string>iCloud.app.mackftp.client</string>
+  </array>
+  <key>com.apple.developer.icloud-container-environment</key>
+  <string>Production</string>
+  -->
+</dict>
+</plist>
