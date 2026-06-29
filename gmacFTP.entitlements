@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Hardened Runtime baseline (required for notarization). Do NOT weaken these. -->
+  <key>com.apple.security.cs.allow-jit</key>
+  <false/>
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <false/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <false/>
+
+  <!-- Network client: outbound FTP / FTPS / SFTP. -->
+  <key>com.apple.security.network.client</key>
+  <true/>
+
+  <!-- iCloud + keychain-access-groups: required to WRITE synchronizable Keychain items
+       (kSecAttrSynchronizable) used by the iCloud sync feature. Without these, SecItemAdd of a
+       synchronizable item fails with errSecMissingEntitlement. Requires a Developer ID
+       provisioning profile that includes iCloud. keychain-access-groups uses the app's own
+       TeamID.BundleID group (same as the implicit default), so existing per-server passwords
+       remain accessible. -->
+  <key>keychain-access-groups</key>
+  <array>
+    <string>SY4HQ4PWVU.app.mackftp.client</string>
+  </array>
+  <key>com.apple.developer.icloud-services</key>
+  <array>
+    <string>CloudKit</string>
+  </array>
+  <key>com.apple.developer.ubiquity-kvstore-identifier</key>
+  <string>SY4HQ4PWVU.app.mackftp.client</string>
+</dict>
+</plist>

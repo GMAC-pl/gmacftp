@@ -1,0 +1,43 @@
+name: Bug Report
+description: Report a reproducible gmacFTP problem
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please do not include passwords, private hostnames, or screenshots of personal folders.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What happened?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps To Reproduce
+      description: Use localhost or placeholder hosts when possible.
+      placeholder: |
+        1. Open ...
+        2. Click ...
+        3. See ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS Version
+      placeholder: "15.5"
+  - type: input
+    id: rust
+    attributes:
+      label: Rust Version
+      placeholder: "rustc 1.88.0"

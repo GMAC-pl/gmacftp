@@ -1,0 +1,21 @@
+# Rust build artifacts
+/target/
+**/*.rs.bk
+
+# local private data (connection exports, env)
+/data/
+.env
+.env.*
+!.env.example
+
+# editor / IDE
+.idea/
+.vscode/
+*.iml
+*.swp
+
+# macOS
+.DS_Store
+**/.DS_Store
+._*
+Icon?
