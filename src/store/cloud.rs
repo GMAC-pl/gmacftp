@@ -1,26 +1,26 @@
-//! iCloud sync — the Apple-recommended way to sync small app data across devices.
+//! Cross-device sync via a plain synced folder (iCloud Drive / Dropbox / etc.).
 //!
 //! The connection LIST (`connections.json`, password-free) and the encrypted VAULT
-//! (`vault.bin`, AES-256-GCM ciphertext) are mirrored to iCloud via
-//! **NSUbiquitousKeyValueStore** — Apple's "UserDefaults, but synced across your Macs"
-//! store (limit 1 MB total; our payload is a few KB). It is the standard mechanism for
-//! preference/state sync and is far more reliable than stuffing blobs into the Keychain.
+//! (`vault.bin`, AES-256-GCM ciphertext) are mirrored as **ordinary files** in a folder the
+//! OS already syncs — by default the user's iCloud Drive
+//! (`~/Library/Mobile Documents/com~apple~CloudDocs/gmacFTP/`). iCloud Drive is just a folder
+//! on disk; a non-sandboxed Developer-ID app writes to it with normal file I/O and macOS
+//! uploads it like any user file. **No iCloud/CloudKit API, no `NSUbiquitousKeyValueStore`,
+//! no App-Store-only entitlement** — this deliberately bypasses the gates that silently
+//! blocked the earlier CloudKit/KV-store attempts (which Apple's docs restrict to App-Store
+//! distribution). The folder is user-configurable (`Settings.sync_folder`), so Dropbox /
+//! Google Drive / Syncthing / any synced folder works too.
 //!
-//! Security model: the KV store is **not** encrypted at rest, so it must never hold a
-//! secret — and it doesn't. `connections.json` contains no passwords (they live only in
-//! `vault.bin`), and `vault.bin` is opaque ciphertext. The one secret, the 32-byte vault
-//! master key, stays in the macOS **Keychain** as a synchronizable item (iCloud Keychain
-//! sync) so the synced vault decrypts on the user's other Macs. *Encrypt locally, sync the
-//! ciphertext, keep the key in the Keychain* — the textbook cross-device layout.
+//! Security model: the folder is not a secret store, and it doesn't hold one.
+//! `connections.json` has no passwords (they live only in `vault.bin`), and `vault.bin` is
+//! opaque ciphertext. The one secret, the 32-byte vault master key, stays in the macOS
+//! **Keychain** (synchronizable via iCloud Keychain) so the synced vault decrypts on the
+//! other Mac. *Encrypt locally, sync the ciphertext, keep the key in the Keychain.*
 //!
-//! Each value is base64(`[8-byte BE u64 timestamp][payload]`) so the pull side does
-//! last-writer-wins against the local file's mtime. Requires the
-//! `com.apple.developer.ubiquity-kvstore-identifier` entitlement (see gmacFTP.entitlements).
-//!
-//! Note: older builds (<= 0.0.3) mirrored connections/vault as synchronizable *Keychain*
-//! generic-password items. Those legacy items are now orphaned (nothing here reads them)
-//! and are left in place — harmless; removing them would risk the user's data for zero
-//! benefit. Local files remain the source of truth either way.
+//! Conflict policy is last-writer-wins by file mtime (iCloud Drive / Dropbox preserve
+//! mtimes across devices, so the newest write wins everywhere). Local files in the config
+//! dir remain the source of truth; the synced files are copies named `gmacftp.connections.json`
+//! / `gmacftp.vault.bin`.
 
 use std::path::PathBuf;
 
@@ -46,74 +46,101 @@ pub fn vault_path() -> Option<PathBuf> {
     config_dir().map(|d| d.join("vault.bin"))
 }
 
-/// Prefix payload with the current-time 8-byte BE timestamp.
-fn encode(payload: &[u8]) -> Vec<u8> {
-    let secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let mut out = Vec::with_capacity(8 + payload.len());
-    out.extend_from_slice(&secs.to_be_bytes());
-    out.extend_from_slice(payload);
-    out
-}
-
-/// Split the 8-byte timestamp prefix.
-fn decode(blob: &[u8]) -> Option<(u64, Vec<u8>)> {
-    if blob.len() < 8 {
-        return None;
-    }
-    let mut ts = [0u8; 8];
-    ts.copy_from_slice(&blob[..8]);
-    Some((u64::from_be_bytes(ts), blob[8..].to_vec()))
-}
-
-// ── iCloud backing: NSUbiquitousKeyValueStore (Foundation) ──
+// ── Sync backing: plain files in a synced folder (iCloud Drive / Dropbox / …) ──
+// No iCloud/CloudKit API is used: iCloud Drive is just a folder on disk, and a non-sandboxed
+// Developer-ID app writes to it with normal file I/O. macOS (or Dropbox, etc.) syncs the
+// folder. This deliberately avoids the App-Store-only `NSUbiquitousKeyValueStore`/CloudKit
+// gate that silently blocked earlier attempts.
 
 #[cfg(target_os = "macos")]
 mod imp {
-    use super::{decode, encode};
-    use base64::{engine::general_purpose::STANDARD as B64, Engine};
-    use objc2::rc::Retained;
-    use objc2_foundation::{NSString, NSUbiquitousKeyValueStore};
+    use std::path::PathBuf;
 
-    fn key(kind: &str) -> Retained<NSString> {
-        // The store is already scoped to this app via the ubiquity-kvstore entitlement, so a
-        // short, stable key is enough. base64 carries the (binary) ts+payload as a string.
-        NSString::from_str(&format!("gmacftp.{kind}"))
+    /// The user's iCloud Drive root (`~/Library/Mobile Documents/com~apple~CloudDocs`) when
+    /// present. Files written here are synced by macOS like any user file.
+    fn icloud_drive_root() -> Option<PathBuf> {
+        let home = std::env::var_os("HOME")?;
+        let p = PathBuf::from(home).join("Library/Mobile Documents/com~apple~CloudDocs");
+        p.is_dir().then_some(p)
     }
 
-    fn store() -> Retained<NSUbiquitousKeyValueStore> {
-        NSUbiquitousKeyValueStore::defaultStore()
+    /// The active sync folder: the user's chosen folder (`Settings.sync_folder`) if it still
+    /// exists, else the default iCloud Drive `gmacFTP/` subfolder when iCloud Drive is set up.
+    pub fn sync_dir() -> Option<PathBuf> {
+        if let Some(s) = crate::store::settings::load().sync_folder {
+            let p = PathBuf::from(&s);
+            if p.is_dir() {
+                return Some(p);
+            }
+            tracing::warn!(target: "gmacftp::cloud", folder = %s, "configured sync_folder missing; falling back to iCloud Drive");
+        }
+        icloud_drive_root().map(|r| r.join("gmacFTP"))
     }
 
-    pub fn write_item(kind: &str, payload: &[u8]) -> Result<(), String> {
-        let s = B64.encode(&encode(payload));
-        store().setString_forKey(Some(&NSString::from_str(&s)), &key(kind));
-        // Ask the iCloud daemon to upload soon (best-effort; it flushes periodically anyway).
-        let _ = store().synchronize();
+    fn filename(kind: &str) -> &'static str {
+        match kind {
+            "connections" => "gmacftp.connections.json",
+            "vault" => "gmacftp.vault.bin",
+            _ => "gmacftp.unknown",
+        }
+    }
+
+    fn path_for(kind: &str) -> Option<PathBuf> {
+        sync_dir().map(|d| d.join(filename(kind)))
+    }
+
+    /// Atomic write (temp + rename) so a crash mid-write can't leave a half-written file.
+    fn atomic_write(path: &std::path::Path, data: &[u8]) -> std::io::Result<()> {
+        use std::io::Write;
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let tmp = path.with_extension(format!("tmp.{}", std::process::id()));
+        {
+            let mut f = std::fs::File::create(&tmp)?;
+            f.write_all(data)?;
+            f.sync_all()?;
+        }
+        std::fs::rename(&tmp, path)?;
         Ok(())
     }
 
+    pub fn write_item(kind: &str, payload: &[u8]) -> Result<(), String> {
+        let p =
+            path_for(kind).ok_or_else(|| "no sync folder (iCloud Drive not set up)".to_string())?;
+        atomic_write(&p, payload).map_err(|e| e.to_string())
+    }
+
+    /// `(file mtime as unix secs, file bytes)`. mtime drives last-writer-wins.
     pub fn read_item(kind: &str) -> Option<(u64, Vec<u8>)> {
-        let s = store().stringForKey(&key(kind))?;
-        let bytes = B64.decode(s.to_string()).ok()?;
-        decode(&bytes)
+        let p = path_for(kind)?;
+        let meta = std::fs::metadata(&p).ok()?;
+        let mtime = meta
+            .modified()
+            .ok()?
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()?
+            .as_secs();
+        let bytes = std::fs::read(&p).ok()?;
+        Some((mtime, bytes))
     }
 
     pub fn delete_item(kind: &str) {
-        store().removeObjectForKey(&key(kind));
-        let _ = store().synchronize();
+        if let Some(p) = path_for(kind) {
+            let _ = std::fs::remove_file(p);
+        }
     }
 
-    /// Hint the iCloud daemon to pull pending remote changes before the next read.
-    pub fn synchronize() {
-        let _ = store().synchronize();
-    }
+    /// No-op: the OS syncs the folder. Kept for symmetry with the push/pull call sites.
+    pub fn synchronize() {}
 }
 
 #[cfg(not(target_os = "macos"))]
 mod imp {
+    use std::path::PathBuf;
+    pub fn sync_dir() -> Option<PathBuf> {
+        None
+    }
     pub fn write_item(_: &str, _: &[u8]) -> Result<(), String> {
         Ok(())
     }
@@ -257,7 +284,7 @@ fn seed_if_empty() {
         }
     }
     if pushed_any {
-        tracing::info!(target: "gmacftp::cloud", "seeded iCloud KV store from local files (migration)");
+        tracing::info!(target: "gmacftp::cloud", "seeded sync folder (iCloud Drive) from local files (migration)");
         imp::synchronize();
     }
 }
@@ -309,14 +336,19 @@ pub fn remote_connections_ts() -> Option<u64> {
     imp::read_item("connections").map(|(ts, _)| ts).filter(|ts| *ts > 0)
 }
 
-/// Explicitly push the current connections + vault to iCloud (the "Send" action). Returns a
-/// human-readable diagnostic: whether each write succeeded, and whether a read-back
-/// immediately finds the just-written item (NSUbiquitousKeyValueStore reads its local cache,
-/// so read-back succeeds the instant the write lands — unlike the old Keychain approach).
+/// Explicitly push the current connections + vault to the sync folder (the "Send" action).
+/// Returns a human-readable diagnostic naming the folder (so the user can verify the files
+/// physically) + whether each write + read-back succeeded.
 pub fn send_now() -> String {
     if !enabled() {
-        return "iCloud sync is OFF — turn it on first.".into();
+        return "Sync is OFF — turn it on first.".into();
     }
+    let Some(dir) = imp::sync_dir() else {
+        return "No sync folder available — turn on iCloud Drive (System Settings → Apple ID → \
+                iCloud → iCloud Drive), or choose a synced folder."
+            .into();
+    };
+    let where_ = dir.display().to_string();
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -327,12 +359,13 @@ pub fn send_now() -> String {
     let readable = imp::read_item("connections").is_some();
     if conn_wrote && vault_wrote && readable {
         format!(
-            "Sent to iCloud ({}) — connections + vault uploaded. They'll appear on your other \
-             Macs within a minute (iCloud syncs in the background; pull from the menu if not).",
+            "Written to {} ({}) — connections + vault. iCloud Drive (or your folder) syncs them \
+             to your other Macs; open the menu there → Pull Servers.",
+            where_,
             fmt_ts(ts)
         )
     } else if conn_wrote && vault_wrote {
-        format!("Sent to iCloud ({}) — connections + vault written.", fmt_ts(ts))
+        format!("Written to {} ({}) — connections + vault.", where_, fmt_ts(ts))
     } else {
         format!(
             "Send ({}) failed: {}",
@@ -363,13 +396,7 @@ fn write_kind(kind: &str, path: Option<PathBuf>, errors: &mut Vec<String>) -> bo
 mod tests {
     use super::*;
     #[test]
-    fn codec_roundtrip() {
-        let (ts, payload) = decode(&encode(b"hello world")).unwrap();
-        assert_eq!(payload, b"hello world");
-        assert!(ts > 0);
-    }
-    #[test]
-    fn decode_rejects_short() {
-        assert!(decode(b"short").is_none());
+    fn fmt_ts_zero_is_unknown() {
+        assert_eq!(fmt_ts(0), "(unknown)");
     }
 }

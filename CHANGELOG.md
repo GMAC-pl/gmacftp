@@ -4,6 +4,11 @@
 
 _(Nothing yet.)_
 
+## 0.0.5 — 2026-06-30
+
+- **iCloud sync switched to a plain synced folder — now works for direct (Developer ID) distribution.** 0.0.4 used `NSUbiquitousKeyValueStore`, which Apple restricts to App Store / Mac App Store distribution; for a Developer-ID build it silently never synced (writes stayed local-only, nothing reached the 2nd Mac). gmacFTP now mirrors `connections.json` + the encrypted vault as **ordinary files** in a folder the OS already syncs — by default your iCloud Drive (`~/Library/Mobile Documents/com~apple~CloudDocs/gmacFTP/`), or any synced folder you choose (Dropbox, Google Drive, Syncthing…). No iCloud/CloudKit API, no App-Store-only entitlement. iCloud Drive is just a folder; a non-sandboxed app writes to it with normal file I/O and macOS syncs it. The vault master key stays in the Keychain (iCloud Keychain sync) so the synced vault decrypts on the other Mac.
+- The synced files are visible in **Finder → iCloud Drive → gmacFTP** (and on your other Macs), so you can verify the sync physically. Last-writer-wins by file modification time.
+
 ## 0.0.4 — 2026-06-30
 
 - **iCloud sync rebuilt on the right mechanism.** v0.0.3 mirrored the connection list and the encrypted vault as _synchronizable Keychain_ items, which Apple's iCloud Keychain propagates unreliably between Macs (so the 2nd Mac often saw "Nothing in iCloud yet"). gmacFTP now syncs server data via **NSUbiquitousKeyValueStore** — Apple's standard "UserDefaults, but synced across your Macs" store for small app data — which is reliable and exactly what iCloud sync is designed for. Only the vault master key (a genuine secret) stays in the Keychain, synced via iCloud Keychain, so the synced vault decrypts on the other Mac. Encrypt locally, sync the ciphertext, keep the key in the Keychain.

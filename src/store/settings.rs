@@ -24,6 +24,12 @@ pub struct Settings {
     /// When true, it is the full user-controlled Favorites order.
     #[serde(default)]
     pub local_favorites_customized: bool,
+    /// Folder where sync copies of connections.json + vault.bin are written as plain files,
+    /// synced by iCloud Drive / Dropbox / etc. (a normal folder — NO iCloud/CloudKit API, so
+    /// no App-Store-only entitlement gate). None = default to iCloud Drive
+    /// (`~/Library/Mobile Documents/com~apple~CloudDocs/gmacFTP`) when that exists.
+    #[serde(default)]
+    pub sync_folder: Option<String>,
     /// Enable iCloud sync of the connection list + encrypted vault across the user's Macs
     /// (via NSUbiquitousKeyValueStore — requires an iCloud account). When on, the vault
     /// master key is ALSO stored as an iCloud-Keychain-syncing item (requires iCloud Keychain
@@ -53,6 +59,7 @@ impl Default for Settings {
             local_favorites: Vec::new(),
             local_favorites_customized: false,
             sync_via_icloud: false,
+            sync_folder: None,
         }
     }
 }
